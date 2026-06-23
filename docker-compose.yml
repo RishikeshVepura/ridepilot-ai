@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ridepilot-postgres
+    environment:
+      POSTGRES_USER: ridepilot
+      POSTGRES_PASSWORD: ridepilot
+      POSTGRES_DB: ridepilot
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ridepilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mock-providers:
+    build: ./services/mock-providers
+    image: ridepilot/mock-providers:dev
+    container_name: ridepilot-mock-providers
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  quote-service:
+    build: ./services/quote-service
+    image: ridepilot/quote-service:dev
+    container_name: ridepilot-quote-service
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-providers:
+        condition: service_started
+    restart: unless-stopped
+
+  booking-service:
+    build: ./services/booking-service
+    image: ridepilot/booking-service:dev
+    container_name: ridepilot-booking-service
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-providers:
+        condition: service_started
+    restart: unless-stopped
+
+  ai-service:
+    build: ./services/ai-service
+    image: ridepilot/ai-service:dev
+    container_name: ridepilot-ai-service
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quote-service:
+        condition: service_started
+      booking-service:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

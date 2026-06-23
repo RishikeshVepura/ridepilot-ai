@@ -1,0 +1,19 @@
+# Development overrides — automatically merged by Docker Compose
+# Adds volume mounts so code changes reflect instantly without rebuilding
+
+services:
+  ai-service:
+    volumes:
+      - ./services/ai-service:/app
+
+  quote-service:
+    volumes:
+      - ./services/quote-service:/app
+
+  booking-service:
+    volumes:
+      - ./services/booking-service:/app
+
+  mock-providers:
+    volumes:
+      - ./services/mock-providers:/app

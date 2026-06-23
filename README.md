@@ -17,14 +17,36 @@ ridepilot/
 └── docker-compose.yml       # Local dev environment
 ```
 
+## Scripts
+
+| Script | What it does |
+|---|---|
+| `./scripts/dev-start.sh` | Builds images if needed, starts all containers |
+| `./scripts/dev-stop.sh` | Stops and removes containers (preserves database) |
+| `./scripts/dev-reset-db.sh` | Wipes the database volume and restarts fresh |
+
 ## Quick Start
 
-```bash
-docker-compose up
+```zsh
+cp .env.example .env        # first time only — add your OPENAI_API_KEY
+./scripts/dev-start.sh
 ```
 
-Frontend: http://localhost:3000  
-AI Service: http://localhost:8001  
-Quote Service: http://localhost:8002  
-Booking Service: http://localhost:8003  
-Mock Providers: http://localhost:8004  
+## Hot Reload (Dev)
+
+`docker-compose.override.yml` is automatically picked up by Docker Compose in development. It mounts local service folders into containers so any file save triggers an instant reload — no rebuild needed.
+
+For production, use only the base `docker-compose.yml`:
+```zsh
+docker compose -f docker-compose.yml up -d
+```
+
+## Service URLs
+
+| Service | URL |
+|---|---|
+| AI Service | http://localhost:8001/health |
+| Quote Service | http://localhost:8002/health |
+| Booking Service | http://localhost:8003/health |
+| Mock Providers | http://localhost:8004/health |
+| PostgreSQL | localhost:5432 |
