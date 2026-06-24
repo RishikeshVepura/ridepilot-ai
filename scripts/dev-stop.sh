@@ -10,7 +10,7 @@ PROJECT_DIR="$SCRIPT_DIR/.."
 
 echo "Stopping RidePilot AI..."
 
-docker compose -f "$PROJECT_DIR/docker-compose.yml" down
+docker compose -f "$PROJECT_DIR/docker-compose.yml" -f "$PROJECT_DIR/docker-compose.override.yml" down
 
 echo "All containers stopped and removed."
 echo "Postgres data volume is preserved — run './scripts/dev-reset-db.sh' to wipe it."

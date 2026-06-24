@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 
+from routes import router
+
 app = FastAPI(title="Mock Providers")
+
+app.include_router(router)
 
 
 @app.get("/health")
