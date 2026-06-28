@@ -1,0 +1,13 @@
+# Keep the build context small and never copy host-installed deps or build
+# output into the image (they are reinstalled/regenerated inside the container).
+node_modules
+.next
+out
+build
+coverage
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env*.local
+.DS_Store
+*.pem

@@ -1,0 +1,23 @@
+{
+  "name": "ridepilot-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RidePilot AI frontend — Next.js chat interface for the AI ride assistant.",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "typescript": "5.4.5"
+  }
+}

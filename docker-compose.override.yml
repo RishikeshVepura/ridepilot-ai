@@ -17,3 +17,12 @@ services:
   mock-providers:
     volumes:
       - ./services/mock-providers:/app
+
+  frontend:
+    # Bind-mount the source for live reload, but keep the image's installed
+    # node_modules and Next.js build cache (anonymous volumes shadow the mount)
+    # so host files don't clobber them.
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next

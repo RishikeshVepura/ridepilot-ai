@@ -23,6 +23,7 @@ docker compose -f "$PROJECT_DIR/docker-compose.yml" -f "$PROJECT_DIR/docker-comp
 
 echo ""
 echo "All services running:"
+echo "  Frontend         → http://localhost:3000"
 echo "  AI Service       → http://localhost:8001/health"
 echo "  Quote Service    → http://localhost:8002/health"
 echo "  Booking Service  → http://localhost:8003/health"

@@ -17,10 +17,15 @@ they implement the chat session lifecycle from design section 7:
         Subscribes to the per-session event bus and relays events as they are
         published, with periodic keepalive comments so idle connections stay up.
 
-Both the POST reply tokens and any background updates are published to the same
-:data:`event_bus` keyed by ``(user_id, chat_session_id)`` so the dedicated GET
-stream stays in sync with what the POST caller receives, and so the event
-consumer added in task 6.4 can push to the same stream.
+The two endpoints use separate channels by design:
+  - The reply to a user's message is streamed back on the POST response only
+    (request/response). It is NOT published to the event bus.
+  - The GET stream carries only server-initiated updates the user did not ask
+    for: background ``quote_update`` / ``booking_update`` / ``ride_status`` events
+    and proactive ``ai_notification`` messages (when the assistant has something
+    to say unprompted), published to the :data:`event_bus` by the event consumer
+    (task 6.4). ``session_created`` is sent on the POST response so the frontend
+    learns which GET stream to open.
 
 Requirements:
   1.1, 1.2, 1.3 — stream the assistant's response to a user message back to the
@@ -108,9 +113,10 @@ async def post_chat_message(
            - then emits a ``done`` event.
          The full assistant message is persisted once streaming completes.
 
-    Every event streamed to the caller is also published to the per-session event
-    bus so the separate ``GET /api/stream`` connection stays in sync. The session
-    is created exactly once here (not again by the GET stream).
+    The reply is streamed on this response only; it is not published to the event
+    bus, so the GET stream stays reserved for server-initiated updates (price
+    changes, ride status, proactive notifications). The session is created exactly
+    once here (not again by the GET stream).
 
     Args:
         req: The chat message request (user, optional chat_session_id, message,
@@ -153,8 +159,6 @@ async def post_chat_message(
         pickup_lng=req.location.lng if req.location else None,
     )
 
-    key = make_session_key(req.user_id, chat_session.id)
-
     async def event_stream() -> AsyncIterator[str]:
         """Produce the SSE frames for this turn and persist the reply."""
         # Lead with session_created on a brand-new conversation so the frontend
@@ -164,19 +168,18 @@ async def post_chat_message(
                 "type": "session_created",
                 "chat_session_id": str(chat_session.id),
             }
-            await event_bus.publish(key, created_event)
             yield format_sse(created_event)
 
-        # Stream the assistant reply token by token, fanning each token out to
-        # the session's GET stream as well, and accumulate the full text.
+        # Stream the assistant reply token by token on THIS response only. The
+        # reply to a user's message belongs to the request/response channel, so it
+        # is deliberately NOT published to the event bus — the GET stream is
+        # reserved for server-initiated updates the user did not ask for.
         parts: list[str] = []
         async for chunk in stream_assistant_reply(
             context, req.message, tool_context=tool_context, db=db
         ):
             parts.append(chunk)
-            token_event = {"type": "token", "content": chunk}
-            await event_bus.publish(key, token_event)
-            yield format_sse(token_event)
+            yield format_sse({"type": "token", "content": chunk})
 
         # Persist the complete assistant message now that streaming is done.
         full_reply = "".join(parts)
@@ -184,9 +187,7 @@ async def post_chat_message(
             db, chat_session.id, MessageRole.ASSISTANT, full_reply
         )
 
-        done_event = {"type": "done"}
-        await event_bus.publish(key, done_event)
-        yield format_sse(done_event)
+        yield format_sse({"type": "done"})
 
     return StreamingResponse(
         event_stream(),
@@ -203,10 +204,11 @@ async def stream_session_events(
 
     The frontend opens this once it knows the chat_session_id (from the first
     POST response's ``session_created`` event). The handler subscribes to the
-    per-session event bus and relays every published event — assistant tokens
-    from the active turn plus background ``quote_update`` / ``ai_notification`` /
-    ``booking_update`` / ``ride_status`` events (pushed by task 6.4) — as SSE
-    frames. Each session has its own independent stream (Requirement 7.2).
+    per-session event bus and relays the server-initiated events the user did not
+    ask for — background ``quote_update`` / ``booking_update`` / ``ride_status``
+    updates and proactive ``ai_notification`` messages (pushed by task 6.4). The
+    assistant's reply to a message is NOT carried here; it streams on the POST
+    response. Each session has its own independent stream (Requirement 7.2).
 
     The connection stays open until the client disconnects; a keepalive comment
     is sent during idle periods. On disconnect the subscription is always removed
