@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 
@@ -46,12 +47,15 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import repository
-from db import get_session
+import tools
+from db import async_session_factory, get_session
 from event_bus import SessionKey, event_bus, make_session_key
 from models import MessageRole
 from responder import stream_assistant_reply
 from schemas import ChatMessageRequest
 from tools import ToolContext
+
+logger = logging.getLogger("ai-service.routes")
 
 router = APIRouter(tags=["chat"])
 
@@ -170,22 +174,30 @@ async def post_chat_message(
             }
             yield format_sse(created_event)
 
-        # Stream the assistant reply token by token on THIS response only. The
-        # reply to a user's message belongs to the request/response channel, so it
-        # is deliberately NOT published to the event bus — the GET stream is
-        # reserved for server-initiated updates the user did not ask for.
-        parts: list[str] = []
-        async for chunk in stream_assistant_reply(
-            context, req.message, tool_context=tool_context, db=db
-        ):
-            parts.append(chunk)
-            yield format_sse({"type": "token", "content": chunk})
+        # Use a DB session scoped to THIS generator rather than the request-scoped
+        # `db`. With a StreamingResponse, the request dependency (get_session) is
+        # torn down when the handler returns — before the body finishes streaming
+        # — which would orphan its pooled connection (SQLAlchemy "non-checked-in
+        # connection" GC warning). An explicit `async with` here guarantees the
+        # connection is returned to the pool when streaming ends.
+        async with async_session_factory() as stream_db:
+            # Stream the assistant reply token by token on THIS response only. The
+            # reply to a user's message belongs to the request/response channel,
+            # so it is deliberately NOT published to the event bus — the GET
+            # stream is reserved for server-initiated updates the user did not
+            # ask for.
+            parts: list[str] = []
+            async for chunk in stream_assistant_reply(
+                context, req.message, tool_context=tool_context, db=stream_db
+            ):
+                parts.append(chunk)
+                yield format_sse({"type": "token", "content": chunk})
 
-        # Persist the complete assistant message now that streaming is done.
-        full_reply = "".join(parts)
-        await repository.add_message(
-            db, chat_session.id, MessageRole.ASSISTANT, full_reply
-        )
+            # Persist the complete assistant message now that streaming is done.
+            full_reply = "".join(parts)
+            await repository.add_message(
+                stream_db, chat_session.id, MessageRole.ASSISTANT, full_reply
+            )
 
         yield format_sse({"type": "done"})
 
@@ -194,6 +206,118 @@ async def post_chat_message(
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
+
+
+async def _stop_monitoring_if_abandoned(
+    user_id: str, chat_session_id: uuid.UUID
+) -> None:
+    """Stop quote monitoring for a session once its SSE client has gone for good.
+
+    Called when an SSE stream disconnects. Waits a short grace period and then,
+    only if no client has re-subscribed for this chat session (i.e. it wasn't a
+    transient EventSource reconnect), cancels the linked quote session in the
+    Quote Service. A real page refresh/close mints a new chat_session_id, so the
+    old session's stream never reconnects and its monitoring is stopped here —
+    which also stops the QUOTE_DELTA events the worker was producing for it.
+
+    Best-effort: any failure is logged and swallowed so a cleanup hiccup can't
+    affect anything else.
+
+    Args:
+        user_id: The owning user of the disconnected stream.
+        chat_session_id: The chat session whose stream disconnected.
+    """
+    await asyncio.sleep(MONITORING_STOP_GRACE_SECONDS)
+
+    key = make_session_key(user_id, chat_session_id)
+    if await event_bus.subscriber_count(key) > 0:
+        # A client reconnected within the grace window — keep monitoring.
+        return
+
+    try:
+        async with async_session_factory() as db:
+            chat_session = await repository.get_chat_session(db, chat_session_id)
+            quote_session_id = (
+                chat_session.quote_session_id if chat_session else None
+            )
+    except Exception:  # noqa: BLE001 - cleanup must not raise
+        logger.exception(
+            "Failed to load chat session %s while stopping monitoring",
+            chat_session_id,
+        )
+        return
+
+    if quote_session_id is None:
+        # No active search linked to this chat — nothing to stop.
+        return
+
+    result = await tools.cancel_quote_session(quote_session_id)
+    if result.get("success"):
+        logger.info(
+            "Stopped monitoring quote session %s after client disconnect (chat %s)",
+            quote_session_id,
+            chat_session_id,
+        )
+    else:
+        logger.warning(
+            "Could not stop monitoring quote session %s: %s",
+            quote_session_id,
+            result.get("error"),
+        )
+
+
+@router.post("/api/sessions/{user_id}/{chat_session_id}/stop")
+async def stop_session_monitoring(
+    user_id: str,
+    chat_session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+) -> dict:
+    """Stop quote monitoring for a chat session at the UI's explicit request.
+
+    The frontend calls this (via ``navigator.sendBeacon`` on page unload, or an
+    explicit user action) to say "stop looking for changes for this session".
+    The handler resolves the chat session's linked quote session and cancels it
+    in the Quote Service, which takes it out of MONITORING so the worker stops
+    refreshing it and stops emitting QUOTE_DELTA events.
+
+    It is intentionally lenient and idempotent: an unknown session, a chat with
+    no active search, or an already-cancelled quote session all return a normal
+    acknowledgement rather than an error, so a best-effort unload beacon never
+    surfaces a failure.
+
+    Args:
+        user_id: The owning user (path segment; part of the stream identity).
+        chat_session_id: The chat session to stop monitoring (path segment).
+        db: Active database session.
+
+    Returns:
+        ``{"status": "stopped", ...}`` when a quote session was cancelled, or
+        ``{"status": "noop", ...}`` when there was nothing to stop.
+    """
+    chat_session = await repository.get_chat_session(db, chat_session_id)
+    quote_session_id = chat_session.quote_session_id if chat_session else None
+
+    if quote_session_id is None:
+        return {"status": "noop", "reason": "no active quote session"}
+
+    result = await tools.cancel_quote_session(quote_session_id)
+    if result.get("success"):
+        logger.info(
+            "Stopped monitoring quote session %s on UI request (chat %s, user %s)",
+            quote_session_id,
+            chat_session_id,
+            user_id,
+        )
+        return {"status": "stopped", "quote_session_id": str(quote_session_id)}
+
+    # Cancellation failed (e.g. already cancelled/expired upstream). Treat as a
+    # no-op so the unload beacon never sees an error.
+    logger.info(
+        "Stop-monitoring request for quote session %s was a no-op: %s",
+        quote_session_id,
+        result.get("error"),
+    )
+    return {"status": "noop", "reason": result.get("error")}
 
 
 @router.get("/api/stream/{user_id}/{chat_session_id}")

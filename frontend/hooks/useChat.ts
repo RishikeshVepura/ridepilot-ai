@@ -37,6 +37,20 @@ function nextMessageId(prefix: string): string {
   return `${prefix}_${Date.now()}_${messageCounter}`;
 }
 
+/**
+ * Greeting shown when the chat first loads so the transcript isn't empty. It's a
+ * static assistant message (stable id, not streamed) — no backend round-trip.
+ */
+const WELCOME_MESSAGE: ChatMessage = {
+  id: "welcome",
+  role: "assistant",
+  content:
+    "Hi! I'm RidePilot, your ride assistant. Tell me where you'd like to " +
+    'go — for example, "Find me a ride to the airport" — and I\'ll compare ' +
+    "your options across providers.",
+  streaming: false,
+};
+
 export interface UseChatOptions {
   /**
    * Optional hook into every parsed server event (tokens included). Tasks 7.2 /
@@ -57,12 +71,18 @@ export interface UseChatResult {
   error: string | null;
   /** Send a user message and stream the assistant reply. */
   sendMessage: (text: string, location?: Location | null) => Promise<void>;
+  /**
+   * Append a standalone (non-streaming) assistant message to the transcript,
+   * deduped by id. Used to surface proactive AI notifications (price/ETA changes,
+   * ride milestones) inline in the chat, not just as banners.
+   */
+  appendAssistantMessage: (id: string, content: string) => void;
 }
 
 export function useChat(options: UseChatOptions = {}): UseChatResult {
   const { onEvent } = options;
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +111,26 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
       ),
     );
   }, []);
+
+  /**
+   * Append a standalone assistant message (e.g. a proactive notification),
+   * deduped by id so the same notification can't be inserted twice across
+   * re-renders.
+   */
+  const appendAssistantMessage = useCallback(
+    (id: string, content: string) => {
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === id)) {
+          return prev;
+        }
+        return [
+          ...prev,
+          { id, role: "assistant", content, streaming: false },
+        ];
+      });
+    },
+    [],
+  );
 
   const sendMessage = useCallback(
     async (text: string, location?: Location | null) => {
@@ -198,5 +238,6 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     userId: USER_ID,
     error,
     sendMessage,
+    appendAssistantMessage,
   };
 }

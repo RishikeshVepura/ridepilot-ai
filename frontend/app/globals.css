@@ -41,15 +41,93 @@ body {
   padding: 0;
 }
 
-.chat {
+/* Two-pane app shell: chat on the left, ride options on the right. The side
+   pane is collapsed until ride data arrives, then expands to a 50/50 split. */
+.app {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+}
+
+.chat-pane {
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  width: 100%;
-  max-width: 760px;
   height: 100vh;
   background: var(--surface);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+}
+
+.side-pane {
+  /* Collapsed by default: zero width, no grow, clipped + faded out. */
+  flex: 0 0 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  overflow: hidden;
+  opacity: 0;
+  border-left: 1px solid transparent;
+  transition:
+    flex-basis 0.35s ease,
+    opacity 0.3s ease;
+}
+
+.side-pane--visible {
+  /* Revealed: take half the width and fade in. The chat pane (flex-grow) shrinks
+     to match, so the expansion reads as a smooth split. */
+  flex-basis: 50%;
+  opacity: 1;
+  border-left-color: var(--border);
+}
+
+.side-pane__title {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.side-pane__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Stack the panes on narrow screens; the side pane expands by height instead. */
+@media (max-width: 880px) {
+  .app {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .chat-pane {
+    flex: none;
+    height: 100vh;
+  }
+
+  .side-pane {
+    flex: none;
+    width: 100%;
+    height: 0;
+    border-left: none;
+    transition:
+      height 0.35s ease,
+      opacity 0.3s ease;
+  }
+
+  .side-pane--visible {
+    height: 100vh;
+    border-top: 1px solid var(--border);
+  }
 }
 
 /* Header ------------------------------------------------------------------ */
@@ -386,6 +464,33 @@ body {
   color: var(--text);
   font-size: 14px;
   animation: notif-in 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Countdown progress bar — shrinks left-to-right over the auto-dismiss window.
+   Its animation-duration is set inline from AUTO_DISMISS_MS so JS and CSS stay
+   in sync. */
+.notification__progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  animation-name: notif-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes notif-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
 
 @keyframes notif-in {

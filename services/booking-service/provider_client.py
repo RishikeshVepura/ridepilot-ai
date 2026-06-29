@@ -18,10 +18,13 @@ client; callers never hit provider APIs directly).
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
 import httpx
+
+logger = logging.getLogger("booking-service.provider")
 
 # Base URL of the Mock Providers service. Inside the Docker network this resolves
 # to the compose service name; overridable via env for other environments.
@@ -324,6 +327,7 @@ async def _get_json(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict:
     """Issue a GET and return the decoded JSON body, raising ProviderError on failure."""
+    logger.info("→ %s GET %s", provider, url)
     try:
         if client is not None:
             response = await client.get(url, params=params)
@@ -332,16 +336,20 @@ async def _get_json(
                 response = await c.get(url, params=params)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        logger.warning("✗ %s GET %s — HTTP %s", provider, url, exc.response.status_code)
         raise ProviderError(
             provider, f"request returned {exc.response.status_code}"
         ) from exc
     except httpx.HTTPError as exc:
+        logger.warning("✗ %s GET %s — request failed: %s", provider, url, exc)
         raise ProviderError(provider, f"request failed: {exc}") from exc
 
     try:
-        return response.json()
+        body = response.json()
     except ValueError as exc:
         raise ProviderError(provider, "response was not valid JSON") from exc
+    logger.info("← %s GET %s %s", provider, url, response.status_code)
+    return body
 
 
 async def _post_json(
@@ -353,6 +361,7 @@ async def _post_json(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict:
     """Issue a POST and return the decoded JSON body, raising ProviderError on failure."""
+    logger.info("→ %s POST %s", provider, url)
     try:
         if client is not None:
             response = await client.post(url, json=json)
@@ -361,13 +370,17 @@ async def _post_json(
                 response = await c.post(url, json=json)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        logger.warning("✗ %s POST %s — HTTP %s", provider, url, exc.response.status_code)
         raise ProviderError(
             provider, f"request returned {exc.response.status_code}"
         ) from exc
     except httpx.HTTPError as exc:
+        logger.warning("✗ %s POST %s — request failed: %s", provider, url, exc)
         raise ProviderError(provider, f"request failed: {exc}") from exc
 
     try:
-        return response.json()
+        body = response.json()
     except ValueError as exc:
         raise ProviderError(provider, "response was not valid JSON") from exc
+    logger.info("← %s POST %s %s", provider, url, response.status_code)
+    return body

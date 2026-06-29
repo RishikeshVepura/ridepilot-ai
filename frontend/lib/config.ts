@@ -33,3 +33,17 @@ export const sessionStreamUrl = (
   `${AI_SERVICE_URL}/api/stream/${encodeURIComponent(
     userId,
   )}/${encodeURIComponent(chatSessionId)}`;
+
+/**
+ * Absolute URL for stopping quote monitoring of a session (POST). The frontend
+ * calls this — typically via navigator.sendBeacon on page unload — to tell the
+ * backend "stop looking for changes for this session", so the monitoring worker
+ * stops refreshing it once the user leaves.
+ */
+export const sessionStopUrl = (
+  userId: string,
+  chatSessionId: string,
+): string =>
+  `${AI_SERVICE_URL}/api/sessions/${encodeURIComponent(
+    userId,
+  )}/${encodeURIComponent(chatSessionId)}/stop`;

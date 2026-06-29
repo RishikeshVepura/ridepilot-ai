@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -6,7 +7,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from db import init_db
 from events import router as internal_events_router
+from llm import llm_status
 from routes import router as chat_router
+
+# Logging verbosity for the service. INFO shows the per-turn assistant activity
+# (tool/API calls, responses, final replies); set LOG_LEVEL=DEBUG for more.
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s %(levelname)s %(name)s | %(message)s",
+)
+# Ensure our own loggers honor the configured level even if a parent (e.g.
+# uvicorn) already installed handlers on import.
+logging.getLogger("ai-service").setLevel(LOG_LEVEL)
 
 # Origins allowed to call the AI Service from the browser. The frontend is the
 # only browser client (design rule 1) and runs on http://localhost:3000 in dev.
@@ -45,3 +58,13 @@ app.include_router(internal_events_router)
 @app.get("/health")
 def health():
     return {"service": "ai-service", "status": "ok"}
+
+
+@app.get("/api/llm-status")
+def llm_status_endpoint():
+    """Report whether the AI Service is using a live LLM or the stub.
+
+    Handy while testing a local model: confirms mode (live/stub), the model and
+    endpoint in use, and whether an API key is set — without exposing the key.
+    """
+    return llm_status()

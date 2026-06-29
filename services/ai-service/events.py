@@ -72,6 +72,27 @@ logger = logging.getLogger("ai-service.events")
 router = APIRouter(tags=["internal-events"])
 
 
+async def push_quote_snapshot(
+    user_id: str, chat_session_id: uuid.UUID | None, quotes: list
+) -> None:
+    """Push freshly fetched quotes to a session's SSE stream as a quote_snapshot.
+
+    Called right after ``fetch_quotes`` succeeds (live LLM and stub paths) so the
+    frontend's ride panel appears immediately — before the assistant finishes
+    composing its spoken summary — instead of staying empty until the first
+    monitoring delta. A None chat_session_id (or empty quotes) is a no-op.
+
+    Args:
+        user_id: The owning user (stream routing key).
+        chat_session_id: The chat session whose stream to push to.
+        quotes: The normalized quote dicts from the fetch_quotes result.
+    """
+    if chat_session_id is None or not quotes:
+        return
+    key = make_session_key(user_id, chat_session_id)
+    await event_bus.publish(key, {"type": "quote_snapshot", "quotes": quotes})
+
+
 async def _persist_spoken_message(
     db: AsyncSession, chat_session_id: uuid.UUID, message: str
 ) -> None:

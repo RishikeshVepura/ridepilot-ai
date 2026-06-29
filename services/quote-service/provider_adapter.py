@@ -18,11 +18,14 @@ are isolated behind an adapter; callers never hit provider APIs directly).
 
 from __future__ import annotations
 
+import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import httpx
+
+logger = logging.getLogger("quote-service.provider")
 
 # Providers we simulate, in a stable order. Matches the Mock Providers config
 # (services/mock-providers/providers.py). Used by get_all_adapters so callers
@@ -159,6 +162,7 @@ class MockProviderAdapter(ProviderAdapter):
             "dropoff_lng": dropoff_lng,
         }
 
+        logger.info("→ %s GET %s", self.provider, url)
         try:
             if self.client is not None:
                 response = await self.client.get(url, params=params)
@@ -167,11 +171,15 @@ class MockProviderAdapter(ProviderAdapter):
                     response = await client.get(url, params=params)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "✗ %s quotes — HTTP %s", self.provider, exc.response.status_code
+            )
             raise ProviderError(
                 self.provider,
                 f"quotes request returned {exc.response.status_code}",
             ) from exc
         except httpx.HTTPError as exc:
+            logger.warning("✗ %s quotes — request failed: %s", self.provider, exc)
             raise ProviderError(
                 self.provider, f"quotes request failed: {exc}"
             ) from exc
@@ -183,7 +191,11 @@ class MockProviderAdapter(ProviderAdapter):
                 self.provider, "quotes response was not valid JSON"
             ) from exc
 
-        return self._normalize_quotes(body)
+        normalized = self._normalize_quotes(body)
+        logger.info(
+            "← %s %d quote option(s)", self.provider, len(normalized)
+        )
+        return normalized
 
     def _normalize_quotes(self, body: dict) -> list[NormalizedQuote]:
         """Map a raw quotes response body into NormalizedQuote objects.

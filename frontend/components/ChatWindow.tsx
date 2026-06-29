@@ -38,7 +38,7 @@ import { RideCards } from "./RideCards";
 import { RideStatusPanel } from "./RideStatusPanel";
 
 export function ChatWindow() {
-  const { messages, isStreaming, chatSessionId, userId, sendMessage, error } =
+  const { messages, isStreaming, chatSessionId, userId, sendMessage, error, appendAssistantMessage } =
     useChat();
 
   const {
@@ -86,6 +86,15 @@ export function ChatWindow() {
     }
   }, [notifications, speak]);
 
+  // Also surface each AI notification inline in the chat transcript (not just as
+  // a transient banner). Deduped by id inside appendAssistantMessage, so the
+  // banner auto-dismissing later never removes the chat copy.
+  useEffect(() => {
+    for (const n of notifications) {
+      appendAssistantMessage(`notif_${n.id}`, n.message);
+    }
+  }, [notifications, appendAssistantMessage]);
+
   // Speak each new ride milestone.
   useEffect(() => {
     for (const s of rideStatuses) {
@@ -97,72 +106,87 @@ export function ChatWindow() {
   }, [rideStatuses, speak]);
 
   const hasUpdates =
-    rideCards.length > 0 || booking !== null || rideStatuses.length > 0;
+    rideCards.length > 0 ||
+    booking !== null ||
+    rideStatuses.length > 0 ||
+    notifications.length > 0;
 
   return (
-    <div className="chat">
-      <header className="chat__header">
-        <div className="chat__brand">
-          <span className="chat__logo" aria-hidden="true">
-            🚗
-          </span>
-          <div>
-            <h1 className="chat__title">RidePilot AI</h1>
-            <p className="chat__subtitle">
-              Your AI ride assistant
-              {chatSessionId ? (
-                <span className="chat__session"> · session active</span>
-              ) : null}
-            </p>
-          </div>
-        </div>
-
-        {voiceSupported ? (
-          <button
-            type="button"
-            className={`chat__voice-toggle${
-              voiceEnabled ? " chat__voice-toggle--on" : ""
-            }`}
-            onClick={toggleVoice}
-            aria-pressed={voiceEnabled}
-            aria-label={
-              voiceEnabled ? "Turn voice responses off" : "Turn voice responses on"
-            }
-            title={
-              voiceEnabled
-                ? "Voice responses on — click to mute"
-                : "Voice responses off — click to hear replies"
-            }
-          >
-            <span aria-hidden="true">{voiceEnabled ? "🔊" : "🔇"}</span>
-            <span className="chat__voice-label">
-              {voiceEnabled ? "Voice on" : "Voice off"}
+    <div className="app">
+      <section className="chat-pane">
+        <header className="chat__header">
+          <div className="chat__brand">
+            <span className="chat__logo" aria-hidden="true">
+              🚗
             </span>
-          </button>
+            <div>
+              <h1 className="chat__title">RidePilot AI</h1>
+              <p className="chat__subtitle">
+                Your AI ride assistant
+                {chatSessionId ? (
+                  <span className="chat__session"> · session active</span>
+                ) : null}
+              </p>
+            </div>
+          </div>
+
+          {voiceSupported ? (
+            <button
+              type="button"
+              className={`chat__voice-toggle${
+                voiceEnabled ? " chat__voice-toggle--on" : ""
+              }`}
+              onClick={toggleVoice}
+              aria-pressed={voiceEnabled}
+              aria-label={
+                voiceEnabled
+                  ? "Turn voice responses off"
+                  : "Turn voice responses on"
+              }
+              title={
+                voiceEnabled
+                  ? "Voice responses on — click to mute"
+                  : "Voice responses off — click to hear replies"
+              }
+            >
+              <span aria-hidden="true">{voiceEnabled ? "🔊" : "🔇"}</span>
+              <span className="chat__voice-label">
+                {voiceEnabled ? "Voice on" : "Voice off"}
+              </span>
+            </button>
+          ) : null}
+        </header>
+
+        <MessageList messages={messages} />
+
+        {error ? (
+          <div className="chat__error" role="alert">
+            {error}
+          </div>
         ) : null}
-      </header>
 
-      <NotificationBanner
-        notifications={notifications}
-        onDismiss={dismissNotification}
-      />
+        <ChatInput
+          onSend={(text) => void sendMessage(text)}
+          disabled={isStreaming}
+        />
+      </section>
 
-      {hasUpdates ? (
-        <div className="chat__updates">
+      <aside
+        className={`side-pane${hasUpdates ? " side-pane--visible" : ""}`}
+        aria-hidden={!hasUpdates}
+      >
+        <div className="side-pane__title">Ride options</div>
+
+        <NotificationBanner
+          notifications={notifications}
+          onDismiss={dismissNotification}
+        />
+
+        <div className="side-pane__content">
           <RideCards cards={rideCards} />
           <RideStatusPanel booking={booking} rideStatuses={rideStatuses} />
         </div>
-      ) : null}
-
-      <MessageList messages={messages} />
-
-      {error ? (
-        <div className="chat__error" role="alert">
-          {error}
-        </div>
-      ) : null}
-
-      <ChatInput onSend={(text) => void sendMessage(text)} disabled={isStreaming} />
+      </aside>
     </div>
   );
 }

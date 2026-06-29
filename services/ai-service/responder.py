@@ -33,6 +33,7 @@ LLM is prompted to. Either way it streams over the same token mechanism.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import uuid
@@ -43,9 +44,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import repository
 import tools
+from events import push_quote_snapshot
 from llm import llm_enabled, stream_llm_reply
+from obs import truncate
 from schemas import ConversationContext
 from tools import ToolContext
+
+logger = logging.getLogger("ai-service.responder")
 
 # Optional artificial delay between streamed tokens, in seconds. Defaults to 0
 # (stream as fast as possible). A small value can be set via env to make the
@@ -135,14 +140,16 @@ async def stream_assistant_reply(
     if llm_enabled():
         # Live path: the model drives the tools; just relay its token stream.
         async for chunk in stream_llm_reply(
-            context, user_message, tool_context=tool_context
+            context, user_message, tool_context=tool_context, db=db
         ):
             yield chunk
         return
 
     # Stub path: simulate intent, drive the real backend tools, then stream the
     # composed reply token by token.
+    logger.info("stub turn start: user_msg=%s", truncate(user_message))
     reply = await _run_stub_turn(context, user_message, tool_context, db)
+    logger.info("stub final reply: %s", truncate(reply))
     delay = _token_delay_seconds()
     for chunk in _tokenize(reply):
         yield chunk
@@ -393,6 +400,9 @@ async def _stub_start_search(
         return _tool_error_reply(fetch_result, "fetch ride quotes")
 
     quotes = fetch_result["data"].get("quotes", [])
+    # Push the quotes to the session stream so the ride panel appears before this
+    # turn's spoken summary streams out.
+    await push_quote_snapshot(ctx.user_id, ctx.chat_session_id, quotes)
     summary = _summarize_quotes(quotes)
     unavailable = fetch_result["data"].get("unavailable_providers", [])
     if unavailable:
@@ -552,7 +562,9 @@ async def _stub_resummarize(ctx: ToolContext) -> str:
     fetch_result = await tools.fetch_quotes(ctx.quote_session_id)
     if not fetch_result.get("success"):
         return _tool_error_reply(fetch_result, "refresh your quotes")
-    return _summarize_quotes(fetch_result["data"].get("quotes", []))
+    quotes = fetch_result["data"].get("quotes", [])
+    await push_quote_snapshot(ctx.user_id, ctx.chat_session_id, quotes)
+    return _summarize_quotes(quotes)
 
 
 def _stub_fallback(has_quote_session: bool, has_booking: bool) -> str:

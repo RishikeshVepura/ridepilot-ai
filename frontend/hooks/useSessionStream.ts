@@ -30,7 +30,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { sessionStreamUrl } from "@/lib/config";
+import { sessionStopUrl, sessionStreamUrl } from "@/lib/config";
 import type {
   BookingState,
   NotificationEntry,
@@ -227,6 +227,26 @@ export function useSessionStream(
     // Re-open only when the target stream changes. The merge helpers close over
     // refs/state setters, which are stable for the component's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, chatSessionId]);
+
+  // Tell the backend to stop monitoring this session when the user leaves the
+  // page (refresh / close / navigation). navigator.sendBeacon is built for
+  // unload-time requests: it's fire-and-forget and not cancelled by the page
+  // going away. The backend cancels the linked quote session so the monitoring
+  // worker stops refreshing it.
+  useEffect(() => {
+    if (!chatSessionId) {
+      return;
+    }
+    const stopMonitoring = () => {
+      try {
+        navigator.sendBeacon?.(sessionStopUrl(userId, chatSessionId));
+      } catch {
+        // Best-effort only; nothing we can do during unload.
+      }
+    };
+    window.addEventListener("pagehide", stopMonitoring);
+    return () => window.removeEventListener("pagehide", stopMonitoring);
   }, [userId, chatSessionId]);
 
   const dismissNotification = (id: string) => {

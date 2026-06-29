@@ -36,12 +36,17 @@ the SSE stream.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+from obs import truncate
+
+logger = logging.getLogger("ai-service.tools")
 
 
 @dataclass(frozen=True)
@@ -212,11 +217,17 @@ async def _request(
         ToolError: On connection failure, timeout, or a non-2xx status.
     """
     url = f"{base_url}{path}"
+    if json_body is not None:
+        logger.info("→ %s  %s %s  body=%s", tool, method, url, truncate(json_body))
+    else:
+        logger.info("→ %s  %s %s", tool, method, url)
+
     try:
         async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_SECONDS) as client:
             response = await client.request(method, url, json=json_body)
     except httpx.RequestError as exc:
         # DNS/connection/timeout — the service is unreachable or too slow.
+        logger.warning("✗ %s  %s  unreachable: %s", tool, url, exc)
         raise ToolError(
             tool, f"could not reach the {tool} backend service: {exc}"
         ) from exc
@@ -229,6 +240,12 @@ async def _request(
             detail = body.get("detail", body) if isinstance(body, dict) else body
         except ValueError:
             detail = response.text
+        logger.warning(
+            "✗ %s  HTTP %s  detail=%s",
+            tool,
+            response.status_code,
+            truncate(detail),
+        )
         raise ToolError(
             tool,
             f"the backend rejected the request (HTTP {response.status_code}): {detail}",
@@ -236,11 +253,14 @@ async def _request(
         )
 
     try:
-        return response.json()
+        data = response.json()
     except ValueError as exc:
         raise ToolError(
             tool, "the backend returned a response that could not be parsed"
         ) from exc
+
+    logger.info("← %s  HTTP %s  body=%s", tool, response.status_code, truncate(data))
+    return data
 
 
 # ---------------------------------------------------------------------------
