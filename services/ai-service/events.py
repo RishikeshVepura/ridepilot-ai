@@ -93,6 +93,54 @@ async def push_quote_snapshot(
     await event_bus.publish(key, {"type": "quote_snapshot", "quotes": quotes})
 
 
+async def push_route_map(
+    user_id: str, chat_session_id: uuid.UUID | None, session: dict | None
+) -> None:
+    """Push the pickup/dropoff coordinates to a session's SSE stream (route_map).
+
+    Called right after ``create_quote_session`` succeeds (live LLM and stub
+    paths) so the frontend can render a map with both points as soon as the
+    search starts. The coordinates come from the created quote session — which,
+    until geocoding exists, are the fixed test coordinates the tool layer
+    backfills — paired with the free-form address labels for display.
+
+    A None chat_session_id, a missing session payload, or missing coordinates is
+    a no-op (nothing to plot).
+
+    Args:
+        user_id: The owning user (stream routing key).
+        chat_session_id: The chat session whose stream to push to.
+        session: The created QuoteSessionOut dict (carries coords + addresses).
+    """
+    if chat_session_id is None or not isinstance(session, dict):
+        return
+
+    pickup_lat = session.get("pickup_lat")
+    pickup_lng = session.get("pickup_lng")
+    dropoff_lat = session.get("dropoff_lat")
+    dropoff_lng = session.get("dropoff_lng")
+    if None in (pickup_lat, pickup_lng, dropoff_lat, dropoff_lng):
+        return
+
+    key = make_session_key(user_id, chat_session_id)
+    await event_bus.publish(
+        key,
+        {
+            "type": "route_map",
+            "pickup": {
+                "lat": float(pickup_lat),
+                "lng": float(pickup_lng),
+                "label": session.get("pickup_address") or "Pickup",
+            },
+            "dropoff": {
+                "lat": float(dropoff_lat),
+                "lng": float(dropoff_lng),
+                "label": session.get("dropoff_address") or "Dropoff",
+            },
+        },
+    )
+
+
 async def _persist_spoken_message(
     db: AsyncSession, chat_session_id: uuid.UUID, message: str
 ) -> None:

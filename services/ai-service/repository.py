@@ -7,8 +7,10 @@ on. They are intentionally thin wrappers over SQLAlchemy so the message handler
   - create a chat session on the user's first message and return its id
     (Requirement 1.4) — see get_or_create_session / create_chat_session.
   - append user/assistant messages as the turn progresses — add_message.
-  - load the last N messages plus ride state per request — load_context
-    (Requirements 7.1, 7.2 rely on this being scoped per chat_session_id).
+  - load the context window per request — load_context. The window is the last
+    N stored messages, in chronological order, plus the chat session's linked
+    ride-state ids (Requirements 7.1, 7.2 rely on this being scoped per
+    chat_session_id).
 
 The number of messages kept as context defaults to 20 and is configurable via
 the CHAT_CONTEXT_MESSAGE_LIMIT environment variable.
@@ -25,10 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models import ChatMessage, ChatSession, ChatSessionStatus, MessageRole
 from schemas import ChatMessageOut, ConversationContext
 
-# Default number of most-recent messages loaded as conversation context. Kept
-# bounded so prompts stay within a reasonable size; override per-deployment via
-# the CHAT_CONTEXT_MESSAGE_LIMIT env var.
+# Default number of most-recent stored messages loaded into the LLM context
+# window. The window also includes the chat session's linked ride-state ids; this
+# limit applies only to replayed chat messages. Keep it bounded so prompts stay
+# within a reasonable size, and override per deployment via the
+# CHAT_CONTEXT_MESSAGE_LIMIT env var.
 DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
+CONTEXT_MESSAGE_LIMIT_ENV = "CHAT_CONTEXT_MESSAGE_LIMIT"
 
 
 def _context_message_limit() -> int:
@@ -38,7 +43,7 @@ def _context_message_limit() -> int:
         The configured limit, or DEFAULT_CONTEXT_MESSAGE_LIMIT when the env var
         is unset, non-numeric, or not positive.
     """
-    raw = os.getenv("CHAT_CONTEXT_MESSAGE_LIMIT")
+    raw = os.getenv(CONTEXT_MESSAGE_LIMIT_ENV)
     if raw is None:
         return DEFAULT_CONTEXT_MESSAGE_LIMIT
     try:
@@ -197,18 +202,20 @@ async def load_context(
     chat_session_id: uuid.UUID,
     limit: int | None = None,
 ) -> ConversationContext:
-    """Load the conversation context for a chat session.
+    """Load the context window for a chat session.
 
-    Returns the last N messages (oldest first, so they can be replayed directly
-    as LLM context) together with the session's ride state (quote_session_id and
-    booking_id). The fetch is scoped strictly by chat_session_id so concurrent
-    sessions never bleed into each other (Requirements 7.1, 7.2).
+    The context window is the bounded, per-session state replayed into a chat
+    turn: the last N stored messages (oldest first, so they can be sent directly
+    to the LLM) plus the chat session's linked ride-state ids (quote_session_id
+    and booking_id). The fetch is scoped strictly by chat_session_id so
+    concurrent sessions never bleed into each other (Requirements 7.1, 7.2).
 
     Args:
         session: Active database session.
         chat_session_id: The session to load context for.
         limit: Max number of most-recent messages to include. Defaults to the
-            CHAT_CONTEXT_MESSAGE_LIMIT env var (or 20).
+            CHAT_CONTEXT_MESSAGE_LIMIT env var (or 20). This limit applies only
+            to stored messages, not ride-state ids.
 
     Returns:
         A ConversationContext bundling session ride state and recent messages.

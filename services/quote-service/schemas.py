@@ -96,3 +96,16 @@ class SelectQuoteResponse(BaseModel):
 
     session: QuoteSessionOut
     selected_quote: QuoteOut
+
+
+class SessionStateResponse(BaseModel):
+    """Response body for GET /quotes/sessions/{id}.
+
+    A read-only snapshot of a session's current state: the session fields
+    (pickup/dropoff, status) plus the quotes currently stored for it. Used by the
+    AI Service to build an authoritative ride-state summary for the model each
+    turn, so it can reason over what is already known instead of re-asking.
+    """
+
+    session: QuoteSessionOut
+    quotes: list[QuoteOut] = Field(default_factory=list)

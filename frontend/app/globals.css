@@ -1,16 +1,42 @@
 :root {
-  --bg: #0f1115;
-  --surface: #171a21;
-  --surface-2: #1f232c;
-  --border: #2a2f3a;
-  --text: #e7e9ee;
-  --text-dim: #9aa3b2;
-  --accent: #4f8cff;
-  --accent-strong: #3b76e8;
-  --user-bubble: #4f8cff;
-  --user-bubble-text: #ffffff;
-  --assistant-bubble: #1f232c;
+  /* Base surfaces — deeper, cooler, with more separation between layers. */
+  --bg: #0a0c10;
+  --bg-elevated: #0e1116;
+  --surface: #14171e;
+  --surface-2: #1b1f28;
+  --surface-3: #232836;
+  --border: #272c38;
+  --border-soft: #1e222c;
+
+  /* Text */
+  --text: #eef1f6;
+  --text-dim: #98a2b3;
+  --text-faint: #6b7384;
+
+  /* Accent — indigo/blue with a gradient pairing for emphasis. */
+  --accent: #5b8cff;
+  --accent-strong: #3f74f0;
+  --accent-soft: rgba(91, 140, 255, 0.14);
+  --accent-glow: rgba(91, 140, 255, 0.45);
+  --accent-gradient: linear-gradient(135deg, #5b8cff 0%, #7a6bff 100%);
+
+  /* Semantic */
+  --success: #2ddf9b;
   --danger: #ff6b6b;
+  --warning: #ffb454;
+
+  /* Bubbles */
+  --user-bubble: var(--accent-gradient);
+  --user-bubble-text: #ffffff;
+  --assistant-bubble: #1b1f28;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.45);
+
+  --radius: 14px;
+  --radius-lg: 18px;
 }
 
 * {
@@ -31,6 +57,31 @@ body {
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Custom scrollbars — slim and unobtrusive. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #2f3545;
+  background-clip: padding-box;
 }
 
 .page {
@@ -39,6 +90,19 @@ body {
   align-items: stretch;
   min-height: 100vh;
   padding: 0;
+  /* Ambient background glow: a soft accent halo top-left, warm tint bottom-right. */
+  background:
+    radial-gradient(
+      900px 600px at 12% -8%,
+      rgba(91, 140, 255, 0.1),
+      transparent 60%
+    ),
+    radial-gradient(
+      800px 600px at 110% 110%,
+      rgba(122, 107, 255, 0.08),
+      transparent 55%
+    ),
+    var(--bg);
 }
 
 /* Two-pane app shell: chat on the left, ride options on the right. The side
@@ -55,7 +119,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: var(--surface);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--bg-elevated) 100%);
 }
 
 .side-pane {
@@ -65,13 +129,13 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: var(--bg);
+  background: var(--bg-elevated);
   overflow: hidden;
   opacity: 0;
   border-left: 1px solid transparent;
   transition:
-    flex-basis 0.35s ease,
-    opacity 0.3s ease;
+    flex-basis 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.35s ease;
 }
 
 .side-pane--visible {
@@ -83,23 +147,23 @@ body {
 }
 
 .side-pane__title {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  font-weight: 600;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
   white-space: nowrap;
 }
 
 .side-pane__content {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: 18px 22px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
 /* Stack the panes on narrow screens; the side pane expands by height instead. */
@@ -120,8 +184,8 @@ body {
     height: 0;
     border-left: none;
     transition:
-      height 0.35s ease,
-      opacity 0.3s ease;
+      height 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.35s ease;
   }
 
   .side-pane--visible {
@@ -136,9 +200,14 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--border-soft);
+  background: rgba(20, 23, 30, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 /* Voice on/off toggle (TTS) ----------------------------------------------- */
@@ -146,7 +215,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 14px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -157,20 +226,23 @@ body {
   cursor: pointer;
   white-space: nowrap;
   transition:
-    border-color 0.15s ease,
-    color 0.15s ease,
-    background 0.15s ease;
+    border-color 0.18s ease,
+    color 0.18s ease,
+    background 0.18s ease,
+    transform 0.18s ease;
 }
 
 .chat__voice-toggle:hover {
   border-color: var(--accent);
   color: var(--text);
+  transform: translateY(-1px);
 }
 
 .chat__voice-toggle--on {
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--accent);
-  background: rgba(79, 140, 255, 0.12);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-glow) inset;
 }
 
 .chat__voice-label {
@@ -180,38 +252,50 @@ body {
 .chat__brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 .chat__logo {
-  font-size: 28px;
+  font-size: 24px;
   line-height: 1;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 13px;
+  background: var(--accent-gradient);
+  box-shadow:
+    0 6px 18px rgba(91, 140, 255, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset;
 }
 
 .chat__title {
   margin: 0;
   font-size: 17px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .chat__subtitle {
-  margin: 0;
+  margin: 2px 0 0;
   font-size: 13px;
   color: var(--text-dim);
 }
 
 .chat__session {
-  color: var(--accent);
+  color: var(--success);
+  font-weight: 600;
 }
 
 /* Message list ------------------------------------------------------------ */
 .message-list {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .message-list--empty {
@@ -222,23 +306,45 @@ body {
 .empty-state {
   text-align: center;
   color: var(--text-dim);
-  max-width: 380px;
+  max-width: 420px;
+  padding: 32px;
+  border-radius: var(--radius-lg);
+  background: rgba(27, 31, 40, 0.4);
+  border: 1px solid var(--border-soft);
 }
 
 .empty-state h2 {
-  margin: 0 0 8px;
-  font-size: 20px;
-  color: var(--text);
+  margin: 0 0 10px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .empty-state p {
   margin: 0;
   font-size: 14px;
+  line-height: 1.6;
 }
 
 /* Bubbles ----------------------------------------------------------------- */
 .bubble-row {
   display: flex;
+  animation: bubble-in 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .bubble-row--user {
@@ -250,25 +356,27 @@ body {
 }
 
 .bubble {
-  max-width: 78%;
-  padding: 10px 14px;
-  border-radius: 16px;
+  max-width: 76%;
+  padding: 11px 15px;
+  border-radius: var(--radius);
   font-size: 15px;
   white-space: pre-wrap;
   word-wrap: break-word;
+  box-shadow: var(--shadow-sm);
 }
 
 .bubble--user {
   background: var(--user-bubble);
   color: var(--user-bubble-text);
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: 5px;
+  box-shadow: 0 4px 14px rgba(91, 140, 255, 0.28);
 }
 
 .bubble--assistant {
   background: var(--assistant-bubble);
   color: var(--text);
   border: 1px solid var(--border);
-  border-bottom-left-radius: 4px;
+  border-bottom-left-radius: 5px;
 }
 
 /* Streaming caret --------------------------------------------------------- */
@@ -279,6 +387,7 @@ body {
   margin-left: 2px;
   vertical-align: text-bottom;
   background: currentColor;
+  border-radius: 1px;
   opacity: 0.7;
   animation: blink 1s steps(2, start) infinite;
 }
@@ -327,13 +436,14 @@ body {
 
 /* Error banner ------------------------------------------------------------ */
 .chat__error {
-  margin: 0 20px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgba(255, 107, 107, 0.12);
-  border: 1px solid var(--danger);
+  margin: 0 22px;
+  padding: 11px 15px;
+  border-radius: var(--radius);
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.5);
   color: var(--danger);
   font-size: 13px;
+  box-shadow: var(--shadow-sm);
 }
 
 /* Composer ---------------------------------------------------------------- */
@@ -341,61 +451,79 @@ body {
   display: flex;
   gap: 10px;
   align-items: flex-end;
-  padding: 16px 20px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  padding: 16px 22px;
+  border-top: 1px solid var(--border-soft);
+  background: rgba(20, 23, 30, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .composer__input {
   flex: 1;
   resize: none;
   max-height: 160px;
-  padding: 12px 14px;
-  border-radius: 12px;
+  padding: 13px 16px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
   font-size: 15px;
   outline: none;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
 .composer__input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .composer__input::placeholder {
-  color: var(--text-dim);
+  color: var(--text-faint);
 }
 
 .composer__send {
-  padding: 12px 20px;
+  padding: 13px 22px;
   border: none;
-  border-radius: 12px;
-  background: var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-gradient);
   color: #fff;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease;
-}.composer__send:hover:not(:disabled) {
-  background: var(--accent-strong);
+  box-shadow: 0 4px 14px rgba(91, 140, 255, 0.3);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.composer__send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(91, 140, 255, 0.42);
+}
+
+.composer__send:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .composer__send:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 /* Voice input mic button (STT) -------------------------------------------- */
 .composer__mic {
   flex-shrink: 0;
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
@@ -403,16 +531,18 @@ body {
   line-height: 1;
   cursor: pointer;
   transition:
-    border-color 0.15s ease,
-    background 0.15s ease;
+    border-color 0.18s ease,
+    background 0.18s ease,
+    transform 0.18s ease;
 }
 
 .composer__mic:hover:not(:disabled) {
   border-color: var(--accent);
+  transform: translateY(-1px);
 }
 
 .composer__mic:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -429,7 +559,7 @@ body {
     box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.45);
   }
   50% {
-    box-shadow: 0 0 0 5px rgba(255, 107, 107, 0);
+    box-shadow: 0 0 0 6px rgba(255, 107, 107, 0);
   }
 }
 
@@ -450,20 +580,25 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 20px 0;
+  padding: 14px 22px 0;
 }
 
 .notification {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(79, 140, 255, 0.12);
-  border: 1px solid var(--accent);
+  gap: 11px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: linear-gradient(
+    135deg,
+    rgba(91, 140, 255, 0.16),
+    rgba(122, 107, 255, 0.1)
+  );
+  border: 1px solid rgba(91, 140, 255, 0.45);
   color: var(--text);
   font-size: 14px;
-  animation: notif-in 0.2s ease;
+  box-shadow: var(--shadow-md);
+  animation: notif-in 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   position: relative;
   overflow: hidden;
 }
@@ -477,7 +612,7 @@ body {
   bottom: 0;
   height: 3px;
   width: 100%;
-  background: var(--accent);
+  background: var(--accent-gradient);
   transform-origin: left center;
   animation-name: notif-progress;
   animation-timing-function: linear;
@@ -496,11 +631,11 @@ body {
 @keyframes notif-in {
   from {
     opacity: 0;
-    transform: translateY(-4px);
+    transform: translateY(-6px) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -521,35 +656,40 @@ body {
   line-height: 1;
   cursor: pointer;
   padding: 0 4px;
+  border-radius: 6px;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
 }
 
 .notification__dismiss:hover {
   color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* Ride cards -------------------------------------------------------------- */
 .ride-cards {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .provider-group {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .provider-group__title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.07em;
   color: var(--text-dim);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
 }
 
 .provider-dot {
@@ -557,50 +697,62 @@ body {
   height: 9px;
   border-radius: 50%;
   background: var(--text-dim);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
 }
 
 .provider-dot--uber {
-  background: #15c47e;
+  background: #1fd18a;
+  box-shadow: 0 0 8px rgba(31, 209, 138, 0.6);
 }
 
 .provider-dot--lyft {
-  background: #ea3bd0;
+  background: #ff4fd8;
+  box-shadow: 0 0 8px rgba(255, 79, 216, 0.6);
 }
 
 .provider-dot--waymo {
-  background: #4f8cff;
+  background: #5b8cff;
+  box-shadow: 0 0 8px rgba(91, 140, 255, 0.6);
 }
 
 .provider-group__cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .ride-card {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--surface-2);
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   transition:
     box-shadow 0.3s ease,
     border-color 0.3s ease,
-    background 0.3s ease;
+    background 0.3s ease,
+    transform 0.18s ease;
+}
+
+.ride-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--surface-3);
+  box-shadow: var(--shadow-md);
 }
 
 .ride-card--updated {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.35);
+  box-shadow: 0 0 0 2px var(--accent-glow), var(--shadow-md);
   animation: card-flash 1.2s ease;
 }
 
 @keyframes card-flash {
   0% {
-    background: rgba(79, 140, 255, 0.18);
+    background: rgba(91, 140, 255, 0.2);
   }
   100% {
     background: var(--surface-2);
@@ -625,37 +777,41 @@ body {
 }
 
 .ride-card__price {
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
   color: var(--text);
 }
 
 .ride-card__meta {
   display: flex;
-  gap: 14px;
-  font-size: 12px;
-  color: var(--text-dim);
+  gap: 16px;
+  font-size: 13px;
+  color: var(--text);
 }
 
 .ride-card__meta-item {
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
 .ride-card__meta-label {
   font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  opacity: 0.7;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
 }
 
 .ride-card__badge {
   align-self: flex-start;
   font-size: 11px;
-  padding: 2px 8px;
+  font-weight: 600;
+  padding: 3px 9px;
   border-radius: 999px;
-  background: rgba(255, 107, 107, 0.15);
-  border: 1px solid var(--danger);
+  background: rgba(255, 107, 107, 0.14);
+  border: 1px solid rgba(255, 107, 107, 0.5);
   color: var(--danger);
 }
 
@@ -663,11 +819,12 @@ body {
 .ride-status {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--surface);
+  gap: 14px;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--bg-elevated) 100%);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 .ride-status__header {
@@ -678,15 +835,16 @@ body {
 
 .ride-status__label {
   font-size: 12px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
 }
 
 .ride-status__pill {
   font-size: 12px;
-  font-weight: 600;
-  padding: 3px 10px;
+  font-weight: 700;
+  padding: 4px 11px;
   border-radius: 999px;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -695,25 +853,28 @@ body {
 
 .ride-status__pill--confirmed,
 .ride-status__pill--ride_started {
-  border-color: #15c47e;
-  color: #15c47e;
+  border-color: var(--success);
+  color: var(--success);
+  background: rgba(45, 223, 155, 0.1);
 }
 
 .ride-status__pill--driver_assigned,
 .ride-status__pill--driver_arriving {
   border-color: var(--accent);
   color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .ride-status__pill--ride_completed {
-  border-color: #9aa3b2;
-  color: #9aa3b2;
+  border-color: var(--text-dim);
+  color: var(--text-dim);
 }
 
 .ride-status__pill--cancelled,
 .ride-status__pill--failed {
   border-color: var(--danger);
   color: var(--danger);
+  background: rgba(255, 107, 107, 0.1);
 }
 
 .ride-status__timeline {
@@ -722,21 +883,159 @@ body {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
+  position: relative;
+}
+
+/* Connecting line down the timeline. */
+.ride-status__timeline::before {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: linear-gradient(
+    180deg,
+    var(--accent) 0%,
+    rgba(91, 140, 255, 0.15) 100%
+  );
 }
 
 .ride-status__milestone {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-size: 14px;
   color: var(--text);
+  padding: 7px 0;
+  position: relative;
 }
 
 .ride-status__dot {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--accent);
   flex-shrink: 0;
+  box-shadow: 0 0 0 3px var(--bg-elevated), 0 0 8px var(--accent-glow);
+  z-index: 1;
+}
+
+/* The most recent milestone (last in the list) gets a subtle pulse. */
+.ride-status__milestone:last-child .ride-status__dot {
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--bg-elevated), 0 0 0 0 var(--accent-glow);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--bg-elevated), 0 0 0 5px rgba(91, 140, 255, 0);
+  }
+}
+
+/* Route map ---------------------------------------------------------------- */
+.route-map {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--bg-elevated) 100%);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  animation: bubble-in 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.route-map__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.route-map__legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.route-map__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.route-map__swatch--pickup {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(45, 223, 155, 0.6);
+}
+
+.route-map__swatch--dropoff {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* The Leaflet canvas. A fixed height keeps the map from collapsing; the rounded
+   corners clip the tiles to match the surrounding card. */
+.route-map__canvas {
+  height: 240px;
+  width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.route-map__placeholder {
+  height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* Custom div-icon marker: a coloured dot with a soft glow + white ring. */
+.route-map__pin {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--pin, var(--accent));
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25), 0 0 10px var(--pin, var(--accent));
+}
+
+/* Keep Leaflet's popups/controls legible on the dark theme. */
+.route-map .leaflet-container {
+  background: var(--surface-2);
+  font: inherit;
+}
+
+.route-map .leaflet-popup-content-wrapper,
+.route-map .leaflet-popup-tip {
+  background: var(--surface-3);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+}
+
+.route-map .leaflet-popup-content {
+  margin: 8px 12px;
+  font-size: 13px;
+}
+
+.route-map .leaflet-control-attribution {
+  background: rgba(10, 12, 16, 0.7);
+  color: var(--text-faint);
+}
+
+.route-map .leaflet-control-attribution a {
+  color: var(--text-dim);
 }

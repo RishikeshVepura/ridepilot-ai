@@ -33,6 +33,7 @@ import { useEffect, useRef, useState } from "react";
 import { sessionStopUrl, sessionStreamUrl } from "@/lib/config";
 import type {
   BookingState,
+  MapRoute,
   NotificationEntry,
   Quote,
   QuoteDeltaChange,
@@ -62,6 +63,10 @@ export interface UseSessionStreamResult {
   rideStatuses: RideStatusEntry[];
   /** Current booking state, or null before any booking_update. */
   booking: BookingState | null;
+  /** Pickup/dropoff route for the map, or null before any route_map. */
+  route: MapRoute | null;
+  /** True once a booking has been created — hides ride cards. */
+  isBooked: boolean;
   /** True while the EventSource connection is open. */
   connected: boolean;
   /** Dismiss a single notification banner. */
@@ -87,6 +92,8 @@ export function useSessionStream(
   const [notifications, setNotifications] = useState<NotificationEntry[]>([]);
   const [rideStatuses, setRideStatuses] = useState<RideStatusEntry[]>([]);
   const [booking, setBooking] = useState<BookingState | null>(null);
+  const [route, setRoute] = useState<MapRoute | null>(null);
+  const [isBooked, setIsBooked] = useState(false);
   const [connected, setConnected] = useState(false);
 
   /** Publish the current card map to render state (sorted for stable display). */
@@ -213,6 +220,16 @@ export function useSessionStream(
             },
           ]);
           break;
+        case "route_map":
+          setRoute({
+            pickup: event.pickup,
+            dropoff: event.dropoff,
+            updatedAt: Date.now(),
+          });
+          break;
+        case "booking_created":
+          setIsBooked(true);
+          break;
         // token / session_created / done are handled by the POST stream in
         // useChat; ignore them here to keep a single source of truth.
         default:
@@ -258,6 +275,8 @@ export function useSessionStream(
     notifications,
     rideStatuses,
     booking,
+    route,
+    isBooked,
     connected,
     dismissNotification,
   };

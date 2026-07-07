@@ -59,6 +59,12 @@ yarn-error.log*
 *.log
 
 # ======================
+# Logs / traces (TRACE_TO_FILE output)
+# ======================
+logs/
+services/*/logs/
+
+# ======================
 # OS
 # ======================
 .DS_Store

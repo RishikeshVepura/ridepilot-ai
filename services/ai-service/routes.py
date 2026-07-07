@@ -144,11 +144,15 @@ async def post_chat_message(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    # Load context BEFORE saving the user message so the history replay doesn't
+    # include the current turn's message (it gets appended separately by
+    # _build_messages). Saving first then loading caused the user message to
+    # appear twice in the prompt — once in history, once as the current turn.
+    context = await repository.load_context(db, chat_session.id)
+
     await repository.add_message(
         db, chat_session.id, MessageRole.USER, req.message
     )
-
-    context = await repository.load_context(db, chat_session.id)
 
     # Build the trusted tool context for this turn: identity (never model-
     # supplied) plus the chat session's current ride-state links and the optional

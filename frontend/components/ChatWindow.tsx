@@ -36,6 +36,7 @@ import { MessageList } from "./MessageList";
 import { NotificationBanner } from "./NotificationBanner";
 import { RideCards } from "./RideCards";
 import { RideStatusPanel } from "./RideStatusPanel";
+import { RouteMap } from "./RouteMap";
 
 export function ChatWindow() {
   const { messages, isStreaming, chatSessionId, userId, sendMessage, error, appendAssistantMessage } =
@@ -46,6 +47,8 @@ export function ChatWindow() {
     notifications,
     rideStatuses,
     booking,
+    route,
+    isBooked,
     dismissNotification,
   } = useSessionStream(userId, chatSessionId);
 
@@ -109,7 +112,8 @@ export function ChatWindow() {
     rideCards.length > 0 ||
     booking !== null ||
     rideStatuses.length > 0 ||
-    notifications.length > 0;
+    notifications.length > 0 ||
+    route !== null;
 
   return (
     <div className="app">
@@ -175,7 +179,9 @@ export function ChatWindow() {
         className={`side-pane${hasUpdates ? " side-pane--visible" : ""}`}
         aria-hidden={!hasUpdates}
       >
-        <div className="side-pane__title">Ride options</div>
+        <div className="side-pane__title">
+          {isBooked ? "Your ride" : "Ride options"}
+        </div>
 
         <NotificationBanner
           notifications={notifications}
@@ -183,7 +189,10 @@ export function ChatWindow() {
         />
 
         <div className="side-pane__content">
-          <RideCards cards={rideCards} />
+          <RouteMap route={route} />
+          {/* Ride cards are only useful while comparing options.
+              Once a booking is created they fade out — only the map stays. */}
+          {!isBooked && <RideCards cards={rideCards} />}
           <RideStatusPanel booking={booking} rideStatuses={rideStatuses} />
         </div>
       </aside>

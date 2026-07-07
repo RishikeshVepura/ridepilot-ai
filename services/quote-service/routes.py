@@ -39,6 +39,7 @@ from schemas import (
     QuoteSessionOut,
     SelectQuoteRequest,
     SelectQuoteResponse,
+    SessionStateResponse,
 )
 
 router = APIRouter(prefix="/quotes", tags=["quotes"])
@@ -133,6 +134,38 @@ async def create_session(
     await db.commit()
     await db.refresh(session)
     return session
+
+
+@router.get("/sessions/{session_id}", response_model=SessionStateResponse)
+async def get_session_state(
+    session_id: uuid.UUID, db: AsyncSession = Depends(get_session)
+) -> SessionStateResponse:
+    """Return a read-only snapshot of a session's current state and quotes.
+
+    Lets the AI Service read the authoritative pickup/dropoff, status, and any
+    stored quotes for a session so it can build a ride-state summary for the
+    model each turn (rather than the model re-asking for details it already
+    has). Does not mutate the session or trigger a fetch.
+
+    Args:
+        session_id: The session to read.
+        db: Active database session.
+
+    Returns:
+        SessionStateResponse with the session and its currently stored quotes.
+
+    Raises:
+        HTTPException: 404 if the session does not exist.
+    """
+    session = await _get_session_or_404(session_id, db)
+    result = await db.execute(
+        select(Quote).where(Quote.quote_session_id == session_id)
+    )
+    quotes = list(result.scalars().all())
+    return SessionStateResponse(
+        session=QuoteSessionOut.model_validate(session),
+        quotes=quotes,
+    )
 
 
 @router.post("/sessions/{session_id}/fetch", response_model=FetchQuotesResponse)

@@ -64,12 +64,12 @@ class ChatSessionOut(BaseModel):
 
 
 class ConversationContext(BaseModel):
-    """The context loaded per request to drive a chat turn.
+    """The context window loaded per request to drive a chat turn.
 
-    Bundles the recent conversation history (last N messages, oldest first) with
-    the current ride state (linked quote session and booking) so the message
-    handler and LLM have everything needed without re-querying. Returned by
-    repository.load_context.
+    Bundles the recent conversation history (last N stored messages, oldest
+    first) with the current chat-linked ride state (quote session and booking
+    ids). This is the bounded state replayed into a turn; authoritative quote
+    and booking details still come from tools. Returned by repository.load_context.
     """
 
     chat_session_id: uuid.UUID

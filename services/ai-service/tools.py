@@ -85,6 +85,19 @@ DEFAULT_BOOKING_SERVICE_URL = "http://booking-service:8003"
 # providers server-side, so allow a little headroom while still bounding hangs.
 UPSTREAM_TIMEOUT_SECONDS = 30.0
 
+# Fixed test coordinates. The system has no address geocoding yet, so it does not
+# know the real lat/lng for a pickup or dropoff — and the LLM must NOT invent them
+# (it has no way to know real coordinates and would fabricate values). Until a
+# proper geocoding step exists, these stand-in coordinates (downtown Phoenix →
+# Sky Harbor airport by default) are injected whenever a coordinate is missing, so
+# the Quote/Booking services — which require all four — can still operate. The
+# mock providers ignore coordinates for pricing, so the values only need to be
+# valid. Override via env to test a different locale.
+TEST_PICKUP_LAT = float(os.getenv("TEST_PICKUP_LAT", "33.42478425099026"))
+TEST_PICKUP_LNG = float(os.getenv("TEST_PICKUP_LNG", "-111.94232584659265"))
+TEST_DROPOFF_LAT = float(os.getenv("TEST_DROPOFF_LAT", "33.43561388126599"))
+TEST_DROPOFF_LNG = float(os.getenv("TEST_DROPOFF_LNG", "-112.010214086741"))
+
 
 def _quote_base_url() -> str:
     """Resolve the Quote Service base URL from the environment.
@@ -297,6 +310,17 @@ async def create_quote_session(
     Returns:
         A tool-result envelope wrapping the created QuoteSessionOut on success.
     """
+    # Backfill any missing coordinates with the fixed test coordinates. A real
+    # GPS pickup (when the frontend sends it) still takes precedence; this only
+    # fills what is unknown so the model never needs to supply — or fabricate —
+    # lat/lng. Remove once real geocoding is in place.
+    if pickup_lat is None or pickup_lng is None:
+        pickup_lat = TEST_PICKUP_LAT
+        pickup_lng = TEST_PICKUP_LNG
+    if dropoff_lat is None or dropoff_lng is None:
+        dropoff_lat = TEST_DROPOFF_LAT
+        dropoff_lng = TEST_DROPOFF_LNG
+
     body = _stringify_ids(
         _drop_none(
             {
@@ -318,6 +342,32 @@ async def create_quote_session(
             _quote_base_url(),
             "/quotes/sessions",
             json_body=body,
+        )
+    except ToolError as exc:
+        return _err(exc.tool, exc.message, exc.status_code)
+    return _ok(data)
+
+
+async def get_quote_session(quote_session_id: uuid.UUID | str) -> dict[str, Any]:
+    """Read a quote session's current state and stored quotes (read-only).
+
+    Internal helper (not exposed to the LLM as a tool): used to build the
+    authoritative ride-state summary injected into each turn so the model can see
+    what is already known — pickup/dropoff, search status, and whether quotes
+    have been fetched — instead of re-asking. Never mutates state.
+
+    Args:
+        quote_session_id: The quote session to read.
+
+    Returns:
+        A tool-result envelope wrapping the SessionStateResponse on success.
+    """
+    try:
+        data = await _request(
+            "get_quote_session",
+            "GET",
+            _quote_base_url(),
+            f"/quotes/sessions/{quote_session_id}",
         )
     except ToolError as exc:
         return _err(exc.tool, exc.message, exc.status_code)
@@ -350,17 +400,78 @@ async def fetch_quotes(quote_session_id: uuid.UUID | str) -> dict[str, Any]:
 
 
 async def select_quote(
-    quote_session_id: uuid.UUID | str, quote_id: uuid.UUID | str
+    quote_session_id: uuid.UUID | str,
+    provider: str,
+    ride_type: str,
 ) -> dict[str, Any]:
-    """Record the user's chosen quote (Requirement 4.1).
+    """Record the user's chosen quote by provider and ride type (Requirement 4.1).
+
+    The model tells us which option the user picked (e.g. provider="uber",
+    ride_type="UberX"). This function resolves the actual quote_id by reading
+    the session's current quotes, then calls the Quote Service /select endpoint.
+    The model never needs to know or supply a quote_id.
 
     Args:
         quote_session_id: The quote session the selection belongs to.
-        quote_id: The specific quote the user chose.
+        provider: The chosen provider key (e.g. "uber", "lyft", "waymo").
+        ride_type: The chosen ride type label (e.g. "UberX", "Lyft Standard").
 
     Returns:
-        A tool-result envelope wrapping the SelectQuoteResponse on success.
+        A tool-result envelope wrapping the SelectQuoteResponse on success, or
+        an error envelope when the provider/ride_type combination is not found.
     """
+    # Fetch the current quotes for this session so we can resolve the quote_id.
+    try:
+        state = await _request(
+            "select_quote",
+            "GET",
+            _quote_base_url(),
+            f"/quotes/sessions/{quote_session_id}",
+        )
+    except ToolError as exc:
+        return _err(exc.tool, exc.message, exc.status_code)
+
+    quotes = state.get("quotes") or []
+    # Match case-insensitively so "uber" matches "Uber", "uberx" matches "UberX", etc.
+    provider_lower = provider.lower().strip()
+    ride_type_lower = ride_type.lower().strip()
+    matched = next(
+        (
+            q for q in quotes
+            if q.get("provider", "").lower() == provider_lower
+            and q.get("ride_type", "").lower() == ride_type_lower
+        ),
+        None,
+    )
+    if matched is None:
+        # Try a partial ride_type match (e.g. "uberx" matches "UberX", "comfort" matches "Uber Comfort")
+        matched = next(
+            (
+                q for q in quotes
+                if q.get("provider", "").lower() == provider_lower
+                and ride_type_lower in q.get("ride_type", "").lower()
+            ),
+            None,
+        )
+    if matched is None:
+        # Last resort: match ride_type across any provider
+        matched = next(
+            (
+                q for q in quotes
+                if ride_type_lower in q.get("ride_type", "").lower()
+            ),
+            None,
+        )
+    if matched is None:
+        return _err(
+            "select_quote",
+            f"Could not find a quote for {provider} {ride_type} in the current session. "
+            "Available options: " + ", ".join(
+                f"{q.get('provider')} {q.get('ride_type')}" for q in quotes
+            ),
+        )
+
+    quote_id = matched["id"]
     body = _stringify_ids({"quote_id": quote_id})
     try:
         data = await _request(
@@ -444,6 +555,16 @@ async def create_booking(
     Returns:
         A tool-result envelope wrapping the created BookingOut on success.
     """
+    # Backfill any missing coordinates with the fixed test coordinates, matching
+    # create_quote_session, so the model never supplies lat/lng. Remove once real
+    # geocoding is in place.
+    if pickup_lat is None or pickup_lng is None:
+        pickup_lat = TEST_PICKUP_LAT
+        pickup_lng = TEST_PICKUP_LNG
+    if dropoff_lat is None or dropoff_lng is None:
+        dropoff_lat = TEST_DROPOFF_LAT
+        dropoff_lng = TEST_DROPOFF_LNG
+
     body = _stringify_ids(
         _drop_none(
             {
@@ -602,7 +723,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Start a new ride search for the user. Call this once both a "
                 "pickup and dropoff are known (Requirement 1.4). Pickup may be "
-                "the user's current GPS location or an entered address."
+                "the user's current GPS location or an entered address. Provide "
+                "only the address labels; the backend resolves the actual "
+                "coordinates — never pass or guess latitude/longitude."
             ),
             "parameters": {
                 "type": "object",
@@ -611,14 +734,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Free-form pickup label, if given.",
                     },
-                    "pickup_lat": {"type": "number"},
-                    "pickup_lng": {"type": "number"},
                     "dropoff_address": {
                         "type": "string",
                         "description": "Free-form dropoff label, if given.",
                     },
-                    "dropoff_lat": {"type": "number"},
-                    "dropoff_lng": {"type": "number"},
                 },
                 "required": [],
             },
@@ -629,19 +748,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "fetch_quotes",
             "description": (
-                "Fetch ride quotes from all providers in parallel for an existing "
+                "Fetch ride quotes from all providers in parallel for the active "
                 "quote session, then summarize the cheapest and fastest options "
-                "to the user (Requirements 2.1, 2.2, 2.4)."
+                "to the user (Requirements 2.1, 2.2, 2.4). The backend targets the "
+                "active session automatically — take no id parameters."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "quote_session_id": {
-                        "type": "string",
-                        "description": "The quote session id to fetch quotes for.",
-                    }
-                },
-                "required": ["quote_session_id"],
+                "properties": {},
+                "required": [],
             },
         },
     },
@@ -651,18 +766,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "select_quote",
             "description": (
                 "Record the specific quote the user chose to move toward booking "
-                "(Requirement 4.1)."
+                "(Requirement 4.1). Pass the provider and ride_type using the EXACT "
+                "values listed under 'Available options' in the ride state block — "
+                "copy them verbatim, do not add a provider prefix. The backend "
+                "resolves the actual quote and the active session — never pass or guess any id."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "quote_session_id": {"type": "string"},
-                    "quote_id": {
+                    "provider": {
                         "type": "string",
-                        "description": "The id of the chosen quote.",
+                        "description": "Exact provider value from the Available options list, e.g. 'uber', 'lyft', 'waymo'.",
+                    },
+                    "ride_type": {
+                        "type": "string",
+                        "description": "Exact ride_type value from the Available options list, e.g. 'UberX', 'Wait & Save'.",
                     },
                 },
-                "required": ["quote_session_id", "quote_id"],
+                "required": ["provider", "ride_type"],
             },
         },
     },
@@ -670,13 +791,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "cancel_quote_session",
-            "description": "Cancel a ride search and stop monitoring its quotes.",
+            "description": (
+                "Cancel the active ride search and stop monitoring its quotes. "
+                "The backend targets the active session automatically — takes no id."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "quote_session_id": {"type": "string"},
-                },
-                "required": ["quote_session_id"],
+                "properties": {},
+                "required": [],
             },
         },
     },
@@ -685,9 +807,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "create_booking",
             "description": (
-                "Create a booking session for a selected ride (Requirement 5.1). "
+                "Create a booking session for the selected ride (Requirement 5.1). "
                 "This does NOT confirm the ride; always follow with verify_booking "
-                "and ask the user for explicit approval before confirm_booking."
+                "and ask the user for explicit approval before confirm_booking. "
+                "The backend links it to the active quote session and resolves all "
+                "ids and coordinates — pass only provider, ride_type, and the "
+                "selected_price the user is booking at."
             ),
             "parameters": {
                 "type": "object",
@@ -695,14 +820,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "provider": {"type": "string"},
                     "ride_type": {"type": "string"},
                     "selected_price": {"type": "number"},
-                    "quote_session_id": {"type": "string"},
-                    "quote_id": {"type": "string"},
-                    "pickup_address": {"type": "string"},
-                    "pickup_lat": {"type": "number"},
-                    "pickup_lng": {"type": "number"},
-                    "dropoff_address": {"type": "string"},
-                    "dropoff_lat": {"type": "number"},
-                    "dropoff_lng": {"type": "number"},
                     "currency": {"type": "string"},
                     "pickup_eta_minutes": {"type": "integer"},
                 },
@@ -715,16 +832,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "verify_booking",
             "description": (
-                "Re-verify the final price of a booking with the provider before "
-                "confirmation (Requirements 5.2, 5.3). If the price changed, tell "
-                "the user the new price and require explicit re-confirmation."
+                "Re-verify the final price of the active booking with the provider "
+                "before confirmation (Requirements 5.2, 5.3). If the price changed, "
+                "tell the user the new price and require explicit re-confirmation. "
+                "The backend targets the active booking automatically — takes no id."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "booking_id": {"type": "string"},
-                },
-                "required": ["booking_id"],
+                "properties": {},
+                "required": [],
             },
         },
     },
@@ -733,15 +849,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "confirm_booking",
             "description": (
-                "Confirm a booking with the provider. ONLY call this after the "
-                "user has explicitly approved the final price in their latest "
-                "message; pass confirmed=true. Never confirm on your own "
-                "(Requirements 5.4, 5.6, 9.3)."
+                "Confirm the active booking with the provider. ONLY call this after "
+                "the user has explicitly approved the final price in their latest "
+                "message; pass confirmed=true. The backend targets the active "
+                "booking automatically — pass only confirmed. Never confirm on your "
+                "own (Requirements 5.4, 5.6, 9.3)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "booking_id": {"type": "string"},
                     "confirmed": {
                         "type": "boolean",
                         "description": (
@@ -750,7 +866,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         ),
                     },
                 },
-                "required": ["booking_id", "confirmed"],
+                "required": ["confirmed"],
             },
         },
     },
@@ -758,13 +874,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "cancel_booking",
-            "description": "Cancel an existing booking with the provider (Requirement 6.4).",
+            "description": (
+                "Cancel the active booking with the provider (Requirement 6.4). "
+                "The backend targets the active booking automatically — takes no id."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "booking_id": {"type": "string"},
-                },
-                "required": ["booking_id"],
+                "properties": {},
+                "required": [],
             },
         },
     },
@@ -773,15 +890,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "get_booking_events",
             "description": (
-                "Fetch the ride timeline (status milestones) for a booking "
-                "(Requirement 6.2)."
+                "Fetch the ride timeline (status milestones) for the active booking "
+                "(Requirement 6.2). The backend targets the active booking "
+                "automatically — takes no id."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "booking_id": {"type": "string"},
-                },
-                "required": ["booking_id"],
+                "properties": {},
+                "required": [],
             },
         },
     },

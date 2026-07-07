@@ -44,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import repository
 import tools
-from events import push_quote_snapshot
+from events import push_quote_snapshot, push_route_map
 from llm import llm_enabled, stream_llm_reply
 from obs import truncate
 from schemas import ConversationContext
@@ -387,14 +387,13 @@ async def _stub_start_search(
     quote_session_id = session_data["id"]
     await _persist_quote_link(db, ctx.chat_session_id, quote_session_id)
 
-    # Without pickup coordinates the Quote Service can't fetch yet; ask for them.
-    if ctx.pickup_lat is None or ctx.pickup_lng is None:
-        dest = f" to {dropoff}" if dropoff else ""
-        return (
-            f"I've started a search{dest}. To compare rides I need your pickup "
-            "location — share your current location or tell me a pickup address."
-        )
+    # Push the pickup/dropoff coords so the frontend renders the route map as
+    # soon as the search starts, before quotes arrive.
+    await push_route_map(ctx.user_id, ctx.chat_session_id, session_data)
 
+    # Coordinates are always resolved by the tool layer now (real GPS pickup when
+    # the frontend sends it, otherwise fixed test coordinates), so the Quote
+    # Service can fetch immediately without asking the user for a location.
     fetch_result = await tools.fetch_quotes(quote_session_id)
     if not fetch_result.get("success"):
         return _tool_error_reply(fetch_result, "fetch ride quotes")
@@ -456,7 +455,9 @@ async def _stub_select_quote(
         return _tool_error_reply(picked, "find the ride you want to select")
 
     quote = picked["quote"]
-    result = await tools.select_quote(ctx.quote_session_id, quote["id"])
+    result = await tools.select_quote(
+        ctx.quote_session_id, quote["provider"], quote["ride_type"]
+    )
     if not result.get("success"):
         return _tool_error_reply(result, "select that ride")
 
@@ -497,6 +498,11 @@ async def _stub_create_booking(
     booking = create_result["data"]
     booking_id = booking["id"]
     await _persist_booking_link(db, ctx.chat_session_id, booking_id)
+
+    # Push booking_created so the frontend hides ride cards immediately.
+    from event_bus import event_bus, make_session_key  # noqa: PLC0415 – local to avoid circular
+    key = make_session_key(ctx.user_id, ctx.chat_session_id)
+    await event_bus.publish(key, {"type": "booking_created", "booking_id": str(booking_id)})
 
     verify_result = await tools.verify_booking(booking_id)
     if not verify_result.get("success"):

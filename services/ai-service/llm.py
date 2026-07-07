@@ -36,7 +36,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import repository
 import tools
-from events import push_quote_snapshot
+from events import push_quote_snapshot, push_route_map
+from event_bus import event_bus, make_session_key
 from obs import truncate
 from schemas import ConversationContext
 from tools import ToolContext
@@ -147,7 +148,6 @@ def _api_key() -> str | None:
         The usable API key, or None.
     """
     raw = os.getenv(OPENAI_API_KEY_ENV)
-    print(f"Open APi ")
     if raw is None:
         return None
     key = raw.strip()
@@ -281,17 +281,24 @@ def _get_client() -> Any:
 
 
 def _build_messages(
-    context: ConversationContext, user_message: str
+    context: ConversationContext,
+    user_message: str,
+    ride_state_block: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Assemble the chat messages: system prompt + history + new user turn.
+    """Assemble the chat messages: system prompt + history + ride state + new turn.
 
     The stored conversation history (oldest first) is replayed directly since
-    message roles already match the chat API's "user"/"assistant" values. The
-    just-received user message is appended last.
+    message roles already match the chat API's "user"/"assistant" values. When a
+    ride-state block is supplied it is inserted as a system message right before
+    the new user turn — placed last so it is the freshest, highest-salience
+    context the model sees, telling it what the backend already knows (pickup,
+    dropoff, search status) so it doesn't re-ask. The just-received user message
+    is appended last.
 
     Args:
         context: The loaded conversation context for this chat session.
         user_message: The raw text the user just sent.
+        ride_state_block: Optional authoritative ride-state summary to inject.
 
     Returns:
         The ordered list of chat message dicts for the completion request.
@@ -299,8 +306,111 @@ def _build_messages(
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     for msg in context.messages:
         messages.append({"role": msg.role, "content": msg.content})
+    if ride_state_block:
+        messages.append({"role": "system", "content": ride_state_block})
     messages.append({"role": "user", "content": user_message})
     return messages
+
+
+async def _build_ride_state_block(ctx: ToolContext) -> str:
+    """Build an authoritative, plain-language ride-state summary for the model.
+
+    Reads the current linked quote session (and booking presence) so the model is
+    explicitly told what the backend already knows — an active search, the
+    pickup/dropoff, the search status, and whether quotes are fetched — rather
+    than having to infer it from raw tool JSON. This directly addresses small
+    models re-asking for a location they already have.
+
+    Best-effort and never raises: if the live read fails, a minimal block is
+    returned so the turn always proceeds.
+
+    Args:
+        ctx: The trusted tool context (carries the linked quote_session_id /
+            booking_id and this turn's optional GPS pickup).
+
+    Returns:
+        A short multi-line string to inject as a system message.
+    """
+    header = (
+        "[Current ride state — provided by the backend and authoritative. Trust "
+        "this over assumptions, and do not ask again for anything already listed.]"
+    )
+    lines = [header]
+
+    if ctx.quote_session_id is None and ctx.booking_id is None:
+        gps = "available" if ctx.pickup_lat is not None else "not shared"
+        lines.append("- No active ride search and no booking yet.")
+        lines.append(f"- User GPS pickup this turn: {gps}.")
+        return "\n".join(lines)
+
+    if ctx.quote_session_id is not None:
+        try:
+            detail = await tools.get_quote_session(ctx.quote_session_id)
+        except Exception:  # noqa: BLE001 - context building must never fail a turn
+            detail = {"success": False}
+
+        if detail.get("success"):
+            data = detail.get("data") or {}
+            session = data.get("session") or {}
+            quotes = data.get("quotes") or []
+            pickup = session.get("pickup_address") or "(set)"
+            dropoff = session.get("dropoff_address") or "(set)"
+            status = session.get("status") or "unknown"
+            fetched = "yes" if quotes else "no"
+            lines.append(f"- Active ride search: yes (id {ctx.quote_session_id}).")
+            lines.append(f"- Pickup: {pickup}")
+            lines.append(f"- Dropoff: {dropoff}")
+            lines.append(f"- Search status: {status}")
+            lines.append(f"- Quotes fetched: {fetched}")
+            lines.append(
+                "- You already have the pickup and dropoff above; do NOT ask the "
+                "user for their location. If quotes are not fetched yet, call "
+                "fetch_quotes for this session now."
+            )
+            # List the exact provider + ride_type values so select_quote is called
+            # with strings that match the stored quotes verbatim (a small model
+            # otherwise reworks them, e.g. "Lyft Wait & Save" vs "Wait & Save").
+            if quotes:
+                lines.append(
+                    "- Available options (use these EXACT provider and ride_type "
+                    "values when calling select_quote — copy verbatim):"
+                )
+                for q in quotes:
+                    if not q.get("available", True):
+                        continue
+                    provider = q.get("provider", "")
+                    ride_type = q.get("ride_type", "")
+                    price = q.get("price")
+                    eta = q.get("pickup_eta_minutes")
+                    price_str = f"${price:.2f}" if isinstance(price, (int, float)) else "n/a"
+                    eta_str = f"{eta} min" if eta is not None else "n/a"
+                    lines.append(
+                        f"    • provider=\"{provider}\", ride_type=\"{ride_type}\" "
+                        f"({price_str}, pickup {eta_str})"
+                    )
+            # Nudge the booking chain when a quote is selected but not yet booked,
+            # so the model actually calls the tools instead of narrating.
+            if status == "QUOTE_SELECTED" and ctx.booking_id is None:
+                lines.append(
+                    "- A quote is SELECTED but no booking exists yet. Next action: "
+                    "call create_booking, then verify_booking. Do not claim the ride "
+                    "is booked until confirm_booking returns success."
+                )
+        else:
+            lines.append(
+                f"- Active ride search: yes (id {ctx.quote_session_id}); live "
+                "details are momentarily unavailable, but a pickup and dropoff "
+                "are already set — do not re-ask for the location."
+            )
+
+    lines.append(
+        f"- Active booking: yes (id {ctx.booking_id}). To finalize after the user "
+        "approves, call confirm_booking(confirmed=true); never claim it is booked "
+        "until that tool returns success."
+        if ctx.booking_id is not None
+        else "- Booking: none yet."
+    )
+    return "\n".join(lines)
 
 
 def _invocation_kwargs(name: str, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -319,6 +429,14 @@ def _invocation_kwargs(name: str, arguments: dict[str, Any], ctx: ToolContext) -
         The keyword arguments to invoke the dispatched tool with.
     """
     kwargs = dict(arguments)
+
+    # Ids are owned by the backend, never the model. Strip any *_id the model may
+    # have supplied (it hallucinates them) and inject the authoritative values
+    # from the trusted ToolContext below. This is the single source of truth for
+    # identity and ride-state ids (Requirement 9.4/9.5).
+    for model_supplied_id in ("user_id", "chat_session_id", "quote_session_id", "booking_id"):
+        kwargs.pop(model_supplied_id, None)
+
     if name == "create_quote_session":
         kwargs["user_id"] = ctx.user_id
         kwargs["chat_session_id"] = ctx.chat_session_id
@@ -335,23 +453,16 @@ def _invocation_kwargs(name: str, arguments: dict[str, Any], ctx: ToolContext) -
     elif name == "create_booking":
         kwargs["user_id"] = ctx.user_id
         kwargs["chat_session_id"] = ctx.chat_session_id
-        # Link the booking to the active search when the model didn't pass it.
-        if not kwargs.get("quote_session_id") and ctx.quote_session_id is not None:
+        # Always link the booking to the active search from trusted context.
+        if ctx.quote_session_id is not None:
             kwargs["quote_session_id"] = str(ctx.quote_session_id)
 
-    # Backstop for weaker models: fill the session/booking id from the trusted
-    # context when the model left it out but the conversation already has one.
-    if (
-        name in _QUOTE_SESSION_TOOLS
-        and not kwargs.get("quote_session_id")
-        and ctx.quote_session_id is not None
-    ):
+    # Always inject the active quote session / booking id from trusted context —
+    # overriding the model entirely. The model only expresses intent (provider,
+    # ride_type, confirmed); it never supplies an id.
+    if name in _QUOTE_SESSION_TOOLS and ctx.quote_session_id is not None:
         kwargs["quote_session_id"] = str(ctx.quote_session_id)
-    if (
-        name in _BOOKING_TOOLS
-        and not kwargs.get("booking_id")
-        and ctx.booking_id is not None
-    ):
+    if name in _BOOKING_TOOLS and ctx.booking_id is not None:
         kwargs["booking_id"] = str(ctx.booking_id)
     return kwargs
 
@@ -497,7 +608,8 @@ async def stream_llm_reply(
     """
     client = _get_client()
     model = _model_name()
-    messages = _build_messages(context, user_message)
+    ride_state_block = await _build_ride_state_block(tool_context)
+    messages = _build_messages(context, user_message, ride_state_block)
     # Mutable copy updated as tools reveal ride-state ids this turn.
     live_ctx = tool_context
     logger.info(
@@ -506,8 +618,15 @@ async def stream_llm_reply(
         len(messages),
         truncate(user_message),
     )
+    logger.info("ride state block:\n%s", ride_state_block)
+    # Full prompt visible at DEBUG level — opt-in because it's large.
+    logger.debug("full messages sent to model:\n%s", truncate(messages, limit=8000))
 
+    round_num = 0
     for _ in range(MAX_TOOL_ROUNDS):
+        round_num += 1
+        logger.info("═══ TOOL ROUND %d START ═══", round_num)
+        
         # Accumulators for this round's streamed assistant message.
         text_parts: list[str] = []
         # Tool calls arrive in fragments keyed by index; reassemble them.
@@ -530,6 +649,8 @@ async def stream_llm_reply(
                 # Stream any visible text immediately.
                 if getattr(delta, "content", None):
                     text_parts.append(delta.content)
+                    # Log each token as it arrives
+                    logger.debug("  token: %s", repr(delta.content))
                     yield delta.content
 
                 # Accumulate tool-call fragments across deltas.
@@ -562,14 +683,24 @@ async def stream_llm_reply(
                 )
             return
 
+        # Log the accumulated text for this round
+        round_text = "".join(text_parts)
+        if round_text:
+            logger.info("══ ROUND %d TEXT OUTPUT ══\n%s", round_num, round_text)
+        else:
+            logger.info("══ ROUND %d TEXT OUTPUT ══ (no text, tool calls only)", round_num)
+
         # No tool calls this round means the model produced its final answer.
         if not tool_calls:
-            logger.info("llm final reply: %s", truncate("".join(text_parts)))
+            logger.info("══ FINAL REPLY (no more tool calls) ══\n%s", round_text)
+            logger.info("═══ TOOL ROUND %d END (FINAL) ═══", round_num)
             return
 
         # Record the assistant's tool-call message exactly as the API expects,
         # then execute each tool and append its result as a `tool` message.
         ordered = [tool_calls[i] for i in sorted(tool_calls)]
+        logger.info("══ ROUND %d TOOL CALLS ══ count=%d", round_num, len(ordered))
+        
         assistant_msg: dict[str, Any] = {
             "role": "assistant",
             "content": "".join(text_parts) or None,
@@ -590,12 +721,15 @@ async def stream_llm_reply(
         for idx, call in enumerate(ordered):
             arguments = _parse_arguments(call["arguments"])
             logger.info(
-                "llm requested tool: %s  args=%s",
+                "  [%d/%d] TOOL CALL: %s",
+                idx + 1,
+                len(ordered),
                 call["name"],
-                truncate(arguments),
             )
+            logger.info("       arguments: %s", truncate(arguments))
+            
             result = await _execute_tool(call["name"], arguments, live_ctx)
-            logger.info("tool result: %s → %s", call["name"], truncate(result))
+            logger.info("       result: %s", truncate(result))
 
             # As soon as quotes are fetched, push them to the session's SSE
             # stream so the ride panel appears right away — before this turn's
@@ -610,16 +744,49 @@ async def stream_llm_reply(
                     live_ctx.user_id, live_ctx.chat_session_id, quotes
                 )
 
+            # As soon as the search is created, push the pickup/dropoff coords so
+            # the frontend can render the route map before quotes even arrive.
+            if (
+                call["name"] == "create_quote_session"
+                and isinstance(result, dict)
+                and result.get("success")
+            ):
+                await push_route_map(
+                    live_ctx.user_id,
+                    live_ctx.chat_session_id,
+                    result.get("data"),
+                )
+
+            # When a booking is created, push a booking_created event so the
+            # frontend can hide the ride cards and show only the map + status.
+            if (
+                call["name"] == "create_booking"
+                and isinstance(result, dict)
+                and result.get("success")
+            ):
+                booking_id = (result.get("data") or {}).get("id")
+                if booking_id and live_ctx.chat_session_id:
+                    key = make_session_key(live_ctx.user_id, live_ctx.chat_session_id)
+                    await event_bus.publish(
+                        key,
+                        {
+                            "type": "booking_created",
+                            "booking_id": str(booking_id),
+                        },
+                    )
+
             # Remember any ride-state ids the tool revealed so later calls (this
             # turn and next) can reuse them even if the model doesn't echo them.
             new_qs, new_bk = _extract_state_ids(call["name"], result)
             if new_qs and str(live_ctx.quote_session_id or "") != new_qs:
+                logger.info("       captured quote_session_id: %s", new_qs)
                 live_ctx = replace(live_ctx, quote_session_id=uuid.UUID(new_qs))
                 await _persist_state_link(
                     db, live_ctx.chat_session_id,
                     quote_session_id=live_ctx.quote_session_id,
                 )
             if new_bk and str(live_ctx.booking_id or "") != new_bk:
+                logger.info("       captured booking_id: %s", new_bk)
                 live_ctx = replace(live_ctx, booking_id=uuid.UUID(new_bk))
                 await _persist_state_link(
                     db, live_ctx.chat_session_id, booking_id=live_ctx.booking_id
@@ -633,6 +800,8 @@ async def stream_llm_reply(
                     "content": json.dumps(result),
                 }
             )
+        
+        logger.info("═══ TOOL ROUND %d END (continuing) ═══", round_num)
         # Loop back: re-invoke the model with the tool results in context.
 
     # Reached the round cap without a final text answer — close out politely.

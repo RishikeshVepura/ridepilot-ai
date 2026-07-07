@@ -122,6 +122,30 @@ export interface RideStatusEvent {
   message: string;
 }
 
+export interface BookingCreatedEvent {
+  type: "booking_created";
+  booking_id: string;
+}
+
+/** A single map point (pickup or dropoff) carried by a route_map event. */
+export interface RoutePoint {
+  lat: number;
+  lng: number;
+  /** Free-form label for the marker popup (e.g. the address). */
+  label: string;
+}
+
+/**
+ * Pickup + dropoff coordinates for the route map, pushed once the quote session
+ * is created. Until geocoding exists these are fixed test coordinates, so the
+ * same route renders regardless of the typed address.
+ */
+export interface RouteMapEvent {
+  type: "route_map";
+  pickup: RoutePoint;
+  dropoff: RoutePoint;
+}
+
 /** The full union of events that can arrive on either SSE stream. */
 export type ServerEvent =
   | SessionCreatedEvent
@@ -131,7 +155,9 @@ export type ServerEvent =
   | QuoteUpdateEvent
   | AiNotificationEvent
   | BookingUpdateEvent
-  | RideStatusEvent;
+  | RideStatusEvent
+  | RouteMapEvent
+  | BookingCreatedEvent;
 
 // --- Derived UI state (built from the events above) -------------------------
 
@@ -173,5 +199,13 @@ export interface RideStatusEntry {
 export interface BookingState {
   booking_id: string;
   status: string;
+  updatedAt: number;
+}
+
+/** The pickup/dropoff route rendered on the map, or null before route_map. */
+export interface MapRoute {
+  pickup: RoutePoint;
+  dropoff: RoutePoint;
+  /** Epoch ms the route was received (used to re-fit the map on change). */
   updatedAt: number;
 }
