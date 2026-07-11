@@ -1,8 +1,9 @@
 """Request and response models for the Booking Service API.
 
 These Pydantic models define the shapes the AI Service (the only caller of the
-Booking Service) sends and receives. ORM models in models.py remain the source
-of truth for persisted state; these schemas are the HTTP boundary representation.
+Booking Service) sends and receives. ORM models in models.booking_models remain
+the source of truth for persisted state; these schemas are the HTTP boundary
+representation.
 """
 
 from __future__ import annotations

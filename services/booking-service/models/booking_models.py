@@ -3,6 +3,10 @@
 Maps the bookings and booking_events tables described in the design document
 (section 10). The Booking Service is the source of truth for all booking and
 ride lifecycle state (Requirement 9.5).
+
+The lifecycle groupings (``ACTIVE_BOOKING_STATUSES``, ``STATUS_RANK``) live here
+alongside the status enum since both the service's conflict check and the ride
+tracker depend on them.
 """
 
 import enum
@@ -20,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from db import Base
+from db.database import Base
 
 
 class BookingStatus(str, enum.Enum):
@@ -65,6 +69,37 @@ class BookingEventType(str, enum.Enum):
     RIDE_COMPLETED = "RIDE_COMPLETED"
     BOOKING_CANCELLED = "BOOKING_CANCELLED"
     BOOKING_FAILED = "BOOKING_FAILED"
+
+
+# Booking statuses that represent a confirmed booking whose ride is still in
+# progress. These are the bookings the ride tracker actively polls, and the
+# statuses that count as "occupying" a provider for the no-two-active-bookings
+# rule (Requirement 7.3). Terminal states (RIDE_COMPLETED, CANCELLED, FAILED,
+# EXPIRED) are intentionally excluded.
+ACTIVE_BOOKING_STATUSES = (
+    BookingStatus.CONFIRMED.value,
+    BookingStatus.DRIVER_ASSIGNMENT_PENDING.value,
+    BookingStatus.DRIVER_ASSIGNED.value,
+    BookingStatus.DRIVER_ARRIVING.value,
+    BookingStatus.RIDE_STARTED.value,
+)
+
+# Monotonic ordering of the booking lifecycle. Used by the ride tracker to decide
+# whether a polled provider status actually advances the booking (so it never
+# moves backwards and never records a duplicate event for an unchanged status).
+STATUS_RANK: dict[str, int] = {
+    BookingStatus.CREATED.value: 0,
+    BookingStatus.PREPARING.value: 1,
+    BookingStatus.FINAL_PRICE_VERIFIED.value: 2,
+    BookingStatus.WAITING_FOR_CONFIRMATION.value: 3,
+    BookingStatus.CONFIRMING.value: 4,
+    BookingStatus.CONFIRMED.value: 5,
+    BookingStatus.DRIVER_ASSIGNMENT_PENDING.value: 6,
+    BookingStatus.DRIVER_ASSIGNED.value: 7,
+    BookingStatus.DRIVER_ARRIVING.value: 8,
+    BookingStatus.RIDE_STARTED.value: 9,
+    BookingStatus.RIDE_COMPLETED.value: 10,
+}
 
 
 class Booking(Base):
