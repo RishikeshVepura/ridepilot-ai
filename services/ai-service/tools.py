@@ -399,6 +399,55 @@ async def fetch_quotes(quote_session_id: uuid.UUID | str) -> dict[str, Any]:
     return _ok(data)
 
 
+def _match_quote(
+    quotes: list[dict[str, Any]], provider: str, ride_type: str
+) -> dict[str, Any] | None:
+    """Find the stored quote matching a provider + ride_type the user chose.
+
+    Matching is progressively looser so a small model's wording still resolves:
+    exact provider+ride_type, then provider + partial ride_type, then partial
+    ride_type across any provider. Returns the matched quote dict or None.
+
+    Args:
+        quotes: The session's current quotes (each a dict with provider/ride_type).
+        provider: The chosen provider key (e.g. "uber").
+        ride_type: The chosen ride type label (e.g. "UberX").
+
+    Returns:
+        The matched quote dict, or None when nothing matches.
+    """
+    provider_lower = provider.lower().strip()
+    ride_type_lower = ride_type.lower().strip()
+    matched = next(
+        (
+            q for q in quotes
+            if q.get("provider", "").lower() == provider_lower
+            and q.get("ride_type", "").lower() == ride_type_lower
+        ),
+        None,
+    )
+    if matched is None:
+        # Provider + partial ride_type (e.g. "comfort" matches "Uber Comfort").
+        matched = next(
+            (
+                q for q in quotes
+                if q.get("provider", "").lower() == provider_lower
+                and ride_type_lower in q.get("ride_type", "").lower()
+            ),
+            None,
+        )
+    if matched is None:
+        # Last resort: partial ride_type across any provider.
+        matched = next(
+            (
+                q for q in quotes
+                if ride_type_lower in q.get("ride_type", "").lower()
+            ),
+            None,
+        )
+    return matched
+
+
 async def select_quote(
     quote_session_id: uuid.UUID | str,
     provider: str,
@@ -432,36 +481,7 @@ async def select_quote(
         return _err(exc.tool, exc.message, exc.status_code)
 
     quotes = state.get("quotes") or []
-    # Match case-insensitively so "uber" matches "Uber", "uberx" matches "UberX", etc.
-    provider_lower = provider.lower().strip()
-    ride_type_lower = ride_type.lower().strip()
-    matched = next(
-        (
-            q for q in quotes
-            if q.get("provider", "").lower() == provider_lower
-            and q.get("ride_type", "").lower() == ride_type_lower
-        ),
-        None,
-    )
-    if matched is None:
-        # Try a partial ride_type match (e.g. "uberx" matches "UberX", "comfort" matches "Uber Comfort")
-        matched = next(
-            (
-                q for q in quotes
-                if q.get("provider", "").lower() == provider_lower
-                and ride_type_lower in q.get("ride_type", "").lower()
-            ),
-            None,
-        )
-    if matched is None:
-        # Last resort: match ride_type across any provider
-        matched = next(
-            (
-                q for q in quotes
-                if ride_type_lower in q.get("ride_type", "").lower()
-            ),
-            None,
-        )
+    matched = _match_quote(quotes, provider, ride_type)
     if matched is None:
         return _err(
             "select_quote",
@@ -517,7 +537,7 @@ async def create_booking(
     chat_session_id: uuid.UUID | str | None,
     provider: str,
     ride_type: str,
-    selected_price: float,
+    selected_price: float | None = None,
     quote_session_id: uuid.UUID | str | None = None,
     quote_id: uuid.UUID | str | None = None,
     pickup_address: str | None = None,
@@ -535,13 +555,19 @@ async def create_booking(
     the price can subsequently be re-verified (:func:`verify_booking`) and, only
     after explicit user approval, confirmed (:func:`confirm_booking`).
 
+    The price is NOT trusted from the model. When a quote_session_id is available,
+    this resolves the stored quote for the chosen provider/ride_type and uses its
+    price, currency, ETA, and quote_id — the model only names the option. An
+    explicitly supplied ``selected_price`` is used only as a fallback when the
+    stored quote cannot be resolved.
+
     Args:
         user_id: The owning user.
         chat_session_id: The chat session this booking belongs to.
         provider: The chosen provider (e.g. "Uber").
         ride_type: The chosen ride type (e.g. "UberX").
-        selected_price: The price the user selected, for later comparison.
-        quote_session_id: Optional originating quote session.
+        selected_price: Fallback price only; normally resolved from the stored quote.
+        quote_session_id: Originating quote session, used to resolve the price.
         quote_id: Optional originating quote.
         pickup_address: Optional pickup label.
         pickup_lat: Optional pickup latitude.
@@ -555,6 +581,46 @@ async def create_booking(
     Returns:
         A tool-result envelope wrapping the created BookingOut on success.
     """
+    # Resolve the price from the stored quote rather than trusting the model.
+    # Read the session, match the chosen provider/ride_type, and use the stored
+    # price/currency/eta/quote_id. The model never supplies the price.
+    if quote_session_id is not None:
+        try:
+            state = await _request(
+                "create_booking",
+                "GET",
+                _quote_base_url(),
+                f"/quotes/sessions/{quote_session_id}",
+            )
+        except ToolError as exc:
+            return _err(exc.tool, exc.message, exc.status_code)
+
+        quotes = state.get("quotes") or []
+        matched = _match_quote(quotes, provider, ride_type)
+        if matched is None:
+            return _err(
+                "create_booking",
+                f"Could not find a quote for {provider} {ride_type} in the current "
+                "session. Available options: " + ", ".join(
+                    f"{q.get('provider')} {q.get('ride_type')}" for q in quotes
+                ),
+            )
+        # Trust the stored quote for price and related fields.
+        selected_price = matched.get("price", selected_price)
+        quote_id = matched.get("id", quote_id)
+        currency = matched.get("currency", currency)
+        pickup_eta_minutes = matched.get("pickup_eta_minutes", pickup_eta_minutes)
+        # Use the exact stored provider/ride_type so the booking matches the quote.
+        provider = matched.get("provider", provider)
+        ride_type = matched.get("ride_type", ride_type)
+
+    if selected_price is None:
+        return _err(
+            "create_booking",
+            "No price available for the selected ride — fetch and select a quote "
+            "before creating a booking.",
+        )
+
     # Backfill any missing coordinates with the fixed test coordinates, matching
     # create_quote_session, so the model never supplies lat/lng. Remove once real
     # geocoding is in place.
@@ -810,20 +876,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Create a booking session for the selected ride (Requirement 5.1). "
                 "This does NOT confirm the ride; always follow with verify_booking "
                 "and ask the user for explicit approval before confirm_booking. "
-                "The backend links it to the active quote session and resolves all "
-                "ids and coordinates — pass only provider, ride_type, and the "
-                "selected_price the user is booking at."
+                "The backend links it to the active quote session and resolves the "
+                "price, ids, and coordinates from the stored quote — pass only the "
+                "provider and ride_type of the selected option. Never pass a price."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "provider": {"type": "string"},
                     "ride_type": {"type": "string"},
-                    "selected_price": {"type": "number"},
-                    "currency": {"type": "string"},
-                    "pickup_eta_minutes": {"type": "integer"},
                 },
-                "required": ["provider", "ride_type", "selected_price"],
+                "required": ["provider", "ride_type"],
             },
         },
     },
