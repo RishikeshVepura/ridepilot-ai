@@ -1,8 +1,9 @@
 """Request and response models for the Quote Service API.
 
 These Pydantic models define the shapes that the AI Service (the only caller of
-the Quote Service) sends and receives. ORM models in models.py remain the source
-of truth for persisted state; these schemas are the HTTP boundary representation.
+the Quote Service) sends and receives. ORM models in models.quote_models remain
+the source of truth for persisted state; these schemas are the HTTP boundary
+representation.
 """
 
 from __future__ import annotations

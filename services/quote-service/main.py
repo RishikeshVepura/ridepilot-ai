@@ -1,3 +1,11 @@
+"""Application entrypoint for the Quote Service.
+
+Wires the layered app together: creates the FastAPI instance, sets up request
+logging, bootstraps the database and starts the quote-monitor background worker
+in the lifespan, and mounts the quotes router. Business logic lives in the
+service layer (services.quote_service); this module only assembles the pieces.
+"""
+
 import asyncio
 import logging
 import os
@@ -6,14 +14,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
-from db import init_db
-from monitor import monitor_loop
-from routes import router as quotes_router
+from api.quote_routes import router as quotes_router
+from db.database import database
+from workers.quote_monitor import QuoteMonitor
 
 # Logging verbosity. INFO logs every incoming request (method, path, status,
 # latency), the monitoring worker's activity, and outbound provider calls. Set
-# LOG_LEVEL=DEBUG for more. Configured here at import so the whole service —
-# including the background worker — emits at the chosen level.
+# LOG_LEVEL=DEBUG for more.
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -27,13 +34,14 @@ logger = logging.getLogger("quote-service.http")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create quote_sessions, quotes, and quote_events tables if they don't exist.
-    await init_db()
+    await database.init_db()
 
     # Start the quote monitoring worker as a background asyncio task. It refreshes
     # MONITORING sessions on a configurable interval and publishes QUOTE_DELTA
     # events to the AI Service. The stop event lets us shut it down cleanly.
     stop_event = asyncio.Event()
-    monitor_task = asyncio.create_task(monitor_loop(stop_event))
+    monitor = QuoteMonitor(database.session_factory)
+    monitor_task = asyncio.create_task(monitor.run_loop(stop_event))
 
     try:
         yield

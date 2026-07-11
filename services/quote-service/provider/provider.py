@@ -43,7 +43,7 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 class ProviderError(Exception):
     """Raised when a provider call fails or returns an unusable response.
 
-    Carries the provider key so callers (e.g. the fetch endpoint and the
+    Carries the provider key so callers (e.g. the fetch use case and the
     monitoring worker) can record a PROVIDER_UNAVAILABLE event and continue
     with the other providers instead of failing the whole fetch.
 
