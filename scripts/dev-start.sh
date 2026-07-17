@@ -16,7 +16,8 @@ echo "Starting RidePilot AI..."
 if [ ! -f "$PROJECT_DIR/.env" ]; then
   echo ".env not found — copying from .env.example"
   cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
-  echo "Created .env — update OPENAI_API_KEY before using the AI service"
+  echo "Created .env — set a real POSTGRES_PASSWORD (and matching DATABASE_URL),"
+  echo "and update OPENAI_API_KEY before using the AI service"
 fi
 
 docker compose -f "$PROJECT_DIR/docker-compose.yml" -f "$PROJECT_DIR/docker-compose.override.yml" up --build -d
