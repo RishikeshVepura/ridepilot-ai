@@ -1,9 +1,9 @@
 """Database engine, session factory, and schema bootstrap for the AI Service.
 
 The AI Service owns the chat_sessions and chat_messages tables in the shared
-PostgreSQL instance. Connection details come from the DATABASE_URL environment
-variable (set via docker-compose / .env) and default to the local docker-compose
-Postgres for convenience.
+PostgreSQL instance. Connection details come from the required DATABASE_URL
+environment variable (set via docker-compose / .env). There is no hardcoded
+fallback so credentials are never baked into the source tree.
 """
 
 import os
@@ -15,12 +15,16 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-# Async SQLAlchemy URL. Matches the value in .env / docker-compose:
-#   postgresql+asyncpg://ridepilot:ridepilot@postgres:5432/ridepilot
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://ridepilot:ridepilot@postgres:5432/ridepilot",
-)
+# Async SQLAlchemy URL, required from the environment. Set it in .env, e.g.:
+#   postgresql+asyncpg://<user>:<password>@postgres:5432/ridepilot
+# Failing fast here avoids silently connecting with guessable default
+# credentials committed to the repo.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is required but not set. "
+        "Define it in your .env (see .env.example)."
+    )
 
 
 class Base(DeclarativeBase):
