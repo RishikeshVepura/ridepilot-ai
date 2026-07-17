@@ -1,10 +1,18 @@
+"""Application entrypoint for the Mock Providers service.
+
+Wires the layered app together: creates the FastAPI instance, sets up request
+logging, and mounts the provider router. There is no database or background
+worker, so no lifespan bootstrap is needed. Business logic lives in the service
+layer (services.provider_service); this module only assembles the pieces.
+"""
+
 import logging
 import os
 import time
 
 from fastapi import FastAPI, Request
 
-from routes import router
+from api.provider_routes import router
 
 # Logging verbosity. INFO logs every incoming provider call (quotes, bookings,
 # status, cancel) with its response status and latency — useful for seeing what
