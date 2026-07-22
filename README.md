@@ -6,14 +6,14 @@ An AI-powered ride assistant that helps users search for rides, compare provider
 
 Five containers plus PostgreSQL, orchestrated with `docker-compose`.
 
-| Service | Role | Host URL |
+| Service | Role | Port |
 |---|---|---|
-| **ai-service** | Central hub. Owns all frontend communication, the LLM tool-calling loop, chat state, and the SSE event stream. | http://localhost:8001 |
-| **quote-service** | Quote sessions, parallel provider fan-out, and background price monitoring. | http://localhost:8002 |
-| **booking-service** | Booking lifecycle: create, verify final price, confirm (idempotent), cancel, and ride-status tracking. | http://localhost:8003 |
-| **mock-providers** | Simulated Uber / Lyft / Waymo APIs (in-memory, fluctuating prices). | http://localhost:8004 |
-| **frontend** | Next.js chat UI with streaming, route map, and ride cards. | http://localhost:3000 |
-| **postgres** | Shared database (each service owns its own tables). | localhost:5433 |
+| **ai-service** | Central hub. Owns all frontend communication, the LLM tool-calling loop, chat state, and the SSE event stream. | 8001 |
+| **quote-service** | Quote sessions, parallel provider fan-out, and background price monitoring. | 8002 |
+| **booking-service** | Booking lifecycle: create, verify final price, confirm (idempotent), cancel, and ride-status tracking. | 8003 |
+| **mock-providers** | Simulated Uber / Lyft / Waymo APIs (in-memory, fluctuating prices). | 8004 |
+| **frontend** | Next.js chat UI with streaming, route map, and ride cards. | 3000 |
+| **postgres** | Shared database (each service owns its own tables). | 5433 |
 
 ### Request flow (a typical turn)
 
