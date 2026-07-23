@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from db import Base
+from db.database import Base
 
 
 class ChatSessionStatus(str, enum.Enum):

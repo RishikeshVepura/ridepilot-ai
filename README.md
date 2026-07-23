@@ -41,7 +41,7 @@ Boundary rule: the LLM never touches a database or a provider directly. It can o
 
 ## Backend architecture (layered)
 
-The `quote-service`, `booking-service`, and `mock-providers` follow a layered **Router → Service → Repository** pattern, so HTTP concerns, business logic, and data access stay separated:
+All four backend services follow a layered **Router → Service → Repository** pattern, so HTTP concerns, business logic, and data access stay separated:
 
 ```
 booking-service/            # (quote-service and mock-providers mirror this layout)
@@ -59,18 +59,29 @@ booking-service/            # (quote-service and mock-providers mirror this layo
 └── core/                   # domain exceptions (mapped to HTTP status codes in the routes)
 ```
 
-The **ai-service** is organized by component rather than the strict CRUD layering, because it isn't a database-backed CRUD service — it's an agent hub:
+The **ai-service** follows the same layering, with a couple of extra folders for
+its agent-specific concerns (it's a hub, not a plain CRUD service):
 
 ```
 ai-service/
 ├── main.py                 # app, logging (incl. optional file trace), CORS, lifespan
-├── routes.py               # chat endpoint (SSE) + internal event consumer
-├── llm.py                  # live streaming LLM tool-calling loop
-├── tools.py                # backend tool layer (calls quote/booking services) + tool schemas
-├── responder.py            # no-key stub responder (deterministic fallback)
-├── event_bus.py / events.py# in-process pub/sub + SSE event fan-out
-├── notifications.py        # pure notification-decision logic
-├── repository.py / models.py / schemas.py / db.py
+├── api/                    # HTTP layer
+│   ├── chat_routes.py      # chat endpoint (SSE stream) + stream/stop endpoints
+│   ├── event_routes.py     # POST /internal/events consumer
+│   └── dependencies.py     # session + service singletons wiring
+├── services/               # ChatResponder (stub + seam), LLMService (live tool loop),
+│   │                       # EventService, and pure notification-decision logic
+│   ├── responder.py
+│   ├── llm_service.py
+│   ├── event_service.py
+│   └── notifications.py
+├── tools/                  # backend tool layer (calls quote/booking services) + tool schemas
+├── repositories/           # ChatRepository — chat session/message/context access
+├── schemas/                # chat + internal-event Pydantic models
+├── models/                 # SQLAlchemy ORM models (chat sessions/messages)
+├── db/                     # Database class
+├── infra/                  # EventBus (SSE pub/sub) + StreamPublisher (typed push API)
+├── core/                   # logging helpers
 └── prompts/system_prompt.md
 ```
 

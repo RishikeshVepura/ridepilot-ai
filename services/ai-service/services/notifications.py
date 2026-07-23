@@ -43,7 +43,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from schemas import QuoteDeltaChange
+from schemas.event_schemas import QuoteDeltaChange
 
 # The single quote event type this consumer understands on /internal/events.
 QUOTE_DELTA_EVENT_TYPE = "QUOTE_DELTA"

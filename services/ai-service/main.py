@@ -1,3 +1,11 @@
+"""Application entrypoint for the AI Service.
+
+Assembles the layered app: configures logging (including the optional file
+trace), creates the FastAPI instance, bootstraps the database in the lifespan,
+sets up CORS, and mounts the chat and internal-event routers. Business logic
+lives in the service layer (services.*); this module only wires the pieces.
+"""
+
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -7,10 +15,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from db import init_db
-from events import router as internal_events_router
-from llm import llm_status
-from routes import router as chat_router
+from api.chat_routes import router as chat_router
+from api.event_routes import router as internal_events_router
+from db.database import database
+from services.llm_service import llm_status
 
 # Logging verbosity for the service. INFO shows the per-turn assistant activity
 # (tool/API calls, responses, final replies); set LOG_LEVEL=DEBUG for more.
@@ -29,13 +37,6 @@ def _env_flag(name: str, default: bool = False) -> bool:
     """Parse a boolean-ish environment variable.
 
     Treats 1/true/yes/on (case-insensitive) as True; anything else as False.
-
-    Args:
-        name: The environment variable name.
-        default: Value to use when the variable is unset.
-
-    Returns:
-        The parsed boolean.
     """
     raw = os.getenv(name)
     if raw is None:
@@ -46,13 +47,11 @@ def _env_flag(name: str, default: bool = False) -> bool:
 # --- Optional file logging (feature-flagged) --------------------------------
 # When TRACE_TO_FILE is enabled, tee the same log lines that go to stdout into a
 # rotating file. This gives a persistent, greppable trace of each turn — the
-# model input, the tools/APIs called, and the final reply — without changing any
-# existing log statements. OFF by default; the trace contains full prompts and
-# conversation history, so it is a debug artifact.
+# model input, the tools/APIs called, and the final reply. The trace contains
+# full prompts and conversation history, so it is a debug artifact.
 TRACE_TO_FILE = _env_flag("TRACE_TO_FILE", True)
 # Path for the trace file. Relative paths resolve against this service's dir, so
-# the default lands in services/ai-service/logs/, which is bind-mounted to the
-# host in dev — open it directly, no `docker logs` needed.
+# the default lands in services/ai-service/logs/, bind-mounted to the host in dev.
 TRACE_LOG_PATH = os.getenv("TRACE_LOG_PATH", "logs/ai-service.log")
 # Rotation bounds so the file can't grow unbounded.
 TRACE_LOG_MAX_BYTES = int(os.getenv("TRACE_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
@@ -63,9 +62,9 @@ def _configure_file_logging() -> None:
     """Attach a rotating file handler to the root logger when TRACE_TO_FILE is on.
 
     No-op when the flag is off. The handler mirrors the stdout format and level
-    and is added to the root logger, so every propagating logger (our
-    ``ai-service.*`` loggers plus uvicorn) is captured in one file. A failure to
-    open the file is logged and swallowed so logging setup never blocks startup.
+    and is added to the root logger, so every propagating logger is captured in
+    one file. A failure to open the file is logged and swallowed so logging setup
+    never blocks startup.
     """
     if not TRACE_TO_FILE:
         return
@@ -73,7 +72,6 @@ def _configure_file_logging() -> None:
     path = Path(TRACE_LOG_PATH)
     if not path.is_absolute():
         path = Path(__file__).parent / path
-        print(path)
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,14 +109,13 @@ CORS_ALLOW_ORIGINS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create chat_sessions and chat_messages tables if they don't exist.
-    await init_db()
+    await database.init_db()
     yield
 
 
 app = FastAPI(title="AI Service", lifespan=lifespan)
 
 # Allow the browser frontend to call the chat + SSE endpoints cross-origin.
-# Without this the browser blocks requests from :3000 to :8001 (CORS error).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOW_ORIGINS,
@@ -140,7 +137,7 @@ def health():
 def llm_status_endpoint():
     """Report whether the AI Service is using a live LLM or the stub.
 
-    Handy while testing a local model: confirms mode (live/stub), the model and
-    endpoint in use, and whether an API key is set — without exposing the key.
+    Confirms mode (live/stub), the model and endpoint in use, and whether an API
+    key is set — without exposing the key.
     """
     return llm_status()

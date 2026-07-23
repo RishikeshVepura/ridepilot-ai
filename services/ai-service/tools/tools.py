@@ -44,7 +44,7 @@ from typing import Any
 
 import httpx
 
-from obs import truncate
+from core.obs import truncate
 
 logger = logging.getLogger("ai-service.tools")
 
