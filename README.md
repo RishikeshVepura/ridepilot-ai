@@ -34,10 +34,10 @@ Boundary rule: the LLM never touches a database or a provider directly. It can o
 
 ## Tech stack
 
-- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2 (async) + asyncpg, httpx, Pydantic v2, OpenAI SDK (any OpenAI-compatible endpoint).
+- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2 (async) + asyncpg, httpx, Pydantic v2, LiteLLM.
 - **Frontend:** Next.js 14, React 18, TypeScript, Leaflet / react-leaflet (route map), Web Speech API (voice).
 - **Infra:** Docker Compose, PostgreSQL 16.
-- **LLM:** any OpenAI-compatible model — a local Ollama model (default dev setup), hosted OpenAI, or providers like Groq/OpenRouter. A no-key deterministic stub mode is built in for a zero-config first run.
+- **LLM:** LiteLLM connects directly to either the Gemini API or a local Ollama model. A no-key deterministic stub mode is built in for a zero-config first run.
 
 ## Backend architecture (layered)
 
@@ -118,22 +118,26 @@ Then open the UI at http://localhost:3000.
 
 ### Choosing how the AI runs
 
-Configure the model with environment variables only — no code changes:
+Configure the provider with environment variables only — no code changes:
 
-- **No-key stub (zero config):** leave `OPENAI_API_KEY` as the placeholder and `OPENAI_BASE_URL` empty. Deterministic, no real model — good for a first run.
-- **Local model via Ollama (default dev setup):**
+- **No-key stub (zero config):** leave `GEMINI_API_KEY` empty. It is deterministic and makes no real model request.
+- **Gemini API:**
   ```
-  OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-  OPENAI_MODEL=qwen2.5:7b
+  LLM_PROVIDER=gemini
+  GEMINI_API_KEY=<your Gemini API key>
+  GEMINI_MODEL=gemini/gemini-3.5-flash-lite
   ```
-  Pull the model first (`ollama pull qwen2.5:7b`). For reliable tool-calling, set Ollama's context length to at least 16k — the system prompt plus tool schemas alone use ~4k tokens, so the default 4k truncates the conversation.
-- **Hosted OpenAI:**
+- **Local Ollama:**
   ```
-  OPENAI_API_KEY=sk-...
-  OPENAI_MODEL=gpt-4o-mini
+  LLM_PROVIDER=ollama
+  OLLAMA_BASE_URL=http://host.docker.internal:11434
+  OLLAMA_MODEL=qwen2.5:7b
   ```
-  (leave `OPENAI_BASE_URL` empty)
-- **Other OpenAI-compatible APIs (Groq, OpenRouter, ...):** set `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL` to the provider's values.
+  Pull the model first (`ollama pull qwen2.5:7b`). Choose a model with tool-calling support.
+
+Gemini models are allow-listed. An unsupported `GEMINI_MODEL` value falls back
+to `gemini/gemini-3.5-flash-lite`. Gemini 3.5 uses `LLM_TEMPERATURE=1.0`;
+keep that default unless you have a tested reason to change it.
 
 ## Scripts
 
@@ -180,8 +184,10 @@ All configuration is via `.env` (see `.env.example` for the full annotated list)
 
 | Variable | Purpose |
 |---|---|
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | Selects the LLM endpoint and model (or stub mode). |
-| `OPENAI_MAX_TOKENS` / `OPENAI_TEMPERATURE` | Reply length cap and sampling temperature. |
+| `LLM_PROVIDER` | Chooses `gemini` or `ollama`. |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Gemini credentials and approved model selection. |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local Ollama endpoint and model selection. |
+| `LLM_MAX_TOKENS` / `LLM_TEMPERATURE` | Per-call output cap and sampling temperature. The service hard-caps output at 256 tokens. |
 | `CHAT_CONTEXT_MESSAGE_LIMIT` | How many recent chat messages are replayed into each LLM turn. |
 | `QUOTE_REFRESH_INTERVAL_SECONDS` | Price-monitoring cadence. |
 | `RIDE_STATUS_POLL_INTERVAL_SECONDS` | Ride-status polling cadence. |

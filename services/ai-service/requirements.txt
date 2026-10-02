@@ -4,5 +4,5 @@ pydantic==2.10.3
 httpx==0.28.1
 sqlalchemy==2.0.36
 asyncpg==0.30.0
-openai==1.57.0
+litellm==1.90.2
 python-dotenv==1.0.1

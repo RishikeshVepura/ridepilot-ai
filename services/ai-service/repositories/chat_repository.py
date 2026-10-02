@@ -35,9 +35,11 @@ from schemas.chat_schemas import ChatMessageOut, ConversationContext
 
 # Default number of most-recent stored messages loaded into the LLM context
 # window. The window also includes the chat session's linked ride-state ids; this
-# limit applies only to replayed chat messages. Override per deployment via the
-# CHAT_CONTEXT_MESSAGE_LIMIT env var.
-DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
+# limit applies only to replayed chat messages. A small window is deliberate:
+# every replayed message is input to every model/tool round.
+DEFAULT_CONTEXT_MESSAGE_LIMIT = 6
+# Never let an environment setting turn a long chat into unbounded model input.
+MAX_CONTEXT_MESSAGE_LIMIT = 6
 CONTEXT_MESSAGE_LIMIT_ENV = "CHAT_CONTEXT_MESSAGE_LIMIT"
 
 
@@ -55,7 +57,9 @@ def _context_message_limit() -> int:
         value = int(raw)
     except ValueError:
         return DEFAULT_CONTEXT_MESSAGE_LIMIT
-    return value if value > 0 else DEFAULT_CONTEXT_MESSAGE_LIMIT
+    if value <= 0:
+        return DEFAULT_CONTEXT_MESSAGE_LIMIT
+    return min(value, MAX_CONTEXT_MESSAGE_LIMIT)
 
 
 class ChatRepository:

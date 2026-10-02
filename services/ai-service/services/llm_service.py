@@ -1,8 +1,8 @@
-"""OpenAI client and streaming tool-call loop for the AI Service.
+"""LiteLLM provider-agnostic streaming tool-call loop for the AI Service.
 
 This module implements the *live* assistant: when a live endpoint is configured —
-an OpenAI API key, or an OpenAI-compatible base URL such as a local Ollama
-server (OPENAI_BASE_URL) — :class:`LLMService` drives a streaming chat completion
+the selected provider is configured — :class:`LLMService` drives a streaming chat
+completion
 with tool calling, where the model decides intent and requests named backend
 tools, and this loop executes those tools (via the shared registry in
 tools.tools) and feeds the structured results back until the model produces a
@@ -36,10 +36,18 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.llm_config import (
+    MAX_TOOL_CALLS_PER_ROUND,
+    MAX_TOOL_RESULT_CHARS,
+    MAX_TOOL_ROUNDS,
+    LLMSettings,
+    load_llm_settings,
+)
 from core.obs import truncate
 from infra.stream_publisher import StreamPublisher
 from repositories.chat_repository import ChatRepository
 from schemas.chat_schemas import ConversationContext
+from services.llm_client import create_llm_stream
 from tools import tools
 from tools.tools import ToolContext
 
@@ -55,37 +63,6 @@ _QUOTE_SESSION_TOOLS = frozenset(
 _BOOKING_TOOLS = frozenset(
     {"verify_booking", "confirm_booking", "cancel_booking", "get_booking_events"}
 )
-
-# Env var holding the API key. The placeholder shipped in .env.example must be
-# treated as "no key" so a freshly cloned repo runs in stub mode out of the box.
-OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
-OPENAI_API_KEY_PLACEHOLDER = "your-openai-api-key-here"
-
-# Optional base URL for any OpenAI-COMPATIBLE endpoint. This is the switch that
-# lets the same code talk to a free local model (e.g. Ollama at
-# http://localhost:11434/v1) for testing, a hosted free tier (Groq, OpenRouter),
-# or paid OpenAI — without changing anything but configuration. When unset, the
-# SDK targets OpenAI's default endpoint.
-OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
-
-# Model is configurable; default to a small, inexpensive tool-calling model.
-# Override with e.g. OPENAI_MODEL=llama3.1 when pointing at a local Ollama server.
-OPENAI_MODEL_ENV = "OPENAI_MODEL"
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
-
-# Cap the length of any single completion so a verbose local model can't ramble
-# on indefinitely. Configurable via OPENAI_MAX_TOKENS.
-OPENAI_MAX_TOKENS_ENV = "OPENAI_MAX_TOKENS"
-DEFAULT_MAX_TOKENS = 512
-
-# Sampling temperature. Lower keeps replies focused and reduces rambling / odd
-# templated output from smaller models. Configurable via OPENAI_TEMPERATURE.
-OPENAI_TEMPERATURE_ENV = "OPENAI_TEMPERATURE"
-DEFAULT_TEMPERATURE = 0.3
-
-# Hard cap on tool-call rounds per turn so a misbehaving model cannot loop
-# forever calling tools without ever producing a final answer.
-MAX_TOOL_ROUNDS = 5
 
 # The system prompt defines RidePilot's role and the tool-calling rules that keep
 # the model inside its boundaries (Requirement 9) and enforce the product rules
@@ -131,118 +108,29 @@ def _load_system_prompt() -> str:
 # reload) to pick up changes.
 SYSTEM_PROMPT = _load_system_prompt()
 
-# Lazily constructed singleton client. Built once on first use so importing this
-# module never fails when the SDK or key is absent.
-_client: Any | None = None
-
-
-def _api_key() -> str | None:
-    """Return the configured OpenAI API key, or None when effectively unset.
-
-    Empty/whitespace values and the .env.example placeholder are all treated as
-    "no key" so the service transparently runs in stub mode.
-    """
-    raw = os.getenv(OPENAI_API_KEY_ENV)
-    if raw is None:
-        return None
-    key = raw.strip()
-    if not key or key == OPENAI_API_KEY_PLACEHOLDER:
-        return None
-    return key
-
-
-def _base_url() -> str | None:
-    """Return the configured OpenAI-compatible base URL, or None when unset."""
-    raw = os.getenv(OPENAI_BASE_URL_ENV)
-    if raw is None:
-        return None
-    url = raw.strip()
-    return url or None
-
 
 def llm_enabled() -> bool:
     """Report whether the live LLM path should be used.
 
-    Enabled when EITHER a usable API key is configured OR a custom base URL is set
-    (a local/open-source server such as Ollama that needs no key). When neither is
-    present the service falls back to the no-key stub simulator in the responder.
+    Enabled when the selected provider is configured. Otherwise the service falls
+    back to the no-key stub simulator in the responder.
     """
-    return _api_key() is not None or _base_url() is not None
+    return load_llm_settings().enabled
 
 
 def llm_status() -> dict[str, Any]:
     """Summarize the current LLM configuration for diagnostics.
 
-    Safe to expose: reports whether the live path is active and which model /
-    endpoint it targets, but never returns the API key itself — only whether one
-    is configured.
+    Safe to expose: reports whether the live path is active and which model it
+    targets, but never returns the API key itself — only whether one is set.
     """
-    enabled = llm_enabled()
+    settings = load_llm_settings()
     return {
-        "mode": "live" if enabled else "stub",
-        "model": _model_name() if enabled else None,
-        "base_url": _base_url(),
-        "api_key_configured": _api_key() is not None,
+        "mode": "live" if settings.enabled else "stub",
+        "model": settings.model if settings.enabled else None,
+        "provider": settings.provider if settings.enabled else None,
+        "api_key_configured": settings.enabled,
     }
-
-
-def _model_name() -> str:
-    """Resolve the chat model name from the environment."""
-    return os.getenv(OPENAI_MODEL_ENV, DEFAULT_OPENAI_MODEL)
-
-
-def _max_tokens() -> int:
-    """Resolve the max completion length (tokens) from the environment."""
-    raw = os.getenv(OPENAI_MAX_TOKENS_ENV)
-    if raw is None:
-        return DEFAULT_MAX_TOKENS
-    try:
-        value = int(raw)
-    except ValueError:
-        return DEFAULT_MAX_TOKENS
-    return value if value > 0 else DEFAULT_MAX_TOKENS
-
-
-def _temperature() -> float:
-    """Resolve the sampling temperature from the environment."""
-    raw = os.getenv(OPENAI_TEMPERATURE_ENV)
-    if raw is None:
-        return DEFAULT_TEMPERATURE
-    try:
-        value = float(raw)
-    except ValueError:
-        return DEFAULT_TEMPERATURE
-    return value if value >= 0 else DEFAULT_TEMPERATURE
-
-
-def _get_client() -> Any:
-    """Construct (once) and return the AsyncOpenAI client.
-
-    Targets a custom OpenAI-compatible endpoint when OPENAI_BASE_URL is set,
-    otherwise OpenAI's default endpoint. Local servers ignore the API key but the
-    SDK requires a non-empty string, so a placeholder is supplied when only a base
-    URL is configured.
-
-    Raises:
-        RuntimeError: If neither an API key nor a base URL is configured.
-    """
-    global _client
-    if _client is None:
-        key = _api_key()
-        base_url = _base_url()
-        if key is None and base_url is None:
-            raise RuntimeError(
-                "No LLM endpoint configured: set OPENAI_API_KEY (hosted) or "
-                "OPENAI_BASE_URL (local/compatible server)"
-            )
-        # Imported lazily so the module loads even where the SDK is unused.
-        from openai import AsyncOpenAI
-
-        client_kwargs: dict[str, Any] = {"api_key": key or "not-needed"}
-        if base_url is not None:
-            client_kwargs["base_url"] = base_url
-        _client = AsyncOpenAI(**client_kwargs)
-    return _client
 
 
 def _build_messages(
@@ -552,8 +440,13 @@ class LLMService:
         Yields:
             Successive token chunks of the assistant's reply, in order.
         """
-        client = _get_client()
-        model = _model_name()
+        settings: LLMSettings = load_llm_settings()
+        if not settings.enabled:
+            # Defensive fallback: ChatResponder normally selects the stub before
+            # entering this method, but never attempt a live call without a key.
+            yield "⚠️ The AI model is not configured. Please try again later."
+            return
+        model = settings.model
         ride_state_block = await self._build_ride_state_block(tool_context)
         messages = _build_messages(context, user_message, ride_state_block)
         # Mutable copy updated as tools reveal ride-state ids this turn.
@@ -579,14 +472,7 @@ class LLMService:
             tool_calls: dict[int, dict[str, Any]] = {}
 
             try:
-                stream = await client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=tools.TOOL_SCHEMAS,
-                    stream=True,
-                    max_tokens=_max_tokens(),
-                    temperature=_temperature(),
-                )
+                stream = await create_llm_stream(settings, messages, tools.TOOL_SCHEMAS)
                 async for chunk in stream:
                     if not chunk.choices:
                         continue
@@ -662,6 +548,24 @@ class LLMService:
             messages.append(assistant_msg)
 
             for idx, call in enumerate(ordered):
+                if idx >= MAX_TOOL_CALLS_PER_ROUND:
+                    # Reply to every rejected call to preserve a valid tool-call
+                    # transcript for the next provider request.
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"] or f"call_{idx}",
+                            "name": call["name"],
+                            "content": json.dumps(
+                                {
+                                    "success": False,
+                                    "tool": call["name"],
+                                    "error": "tool-call limit reached for this model round",
+                                }
+                            ),
+                        }
+                    )
+                    continue
                 arguments = _parse_arguments(call["arguments"])
                 logger.info(
                     "  [%d/%d] TOOL CALL: %s", idx + 1, len(ordered), call["name"]
@@ -731,7 +635,9 @@ class LLMService:
                         "role": "tool",
                         "tool_call_id": call["id"] or f"call_{idx}",
                         "name": call["name"],
-                        "content": json.dumps(result),
+                        "content": truncate(
+                            json.dumps(result), limit=MAX_TOOL_RESULT_CHARS
+                        ),
                     }
                 )
 

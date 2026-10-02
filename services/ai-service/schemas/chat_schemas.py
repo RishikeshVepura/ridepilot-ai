@@ -32,7 +32,9 @@ class ChatMessageRequest(BaseModel):
 
     user_id: str
     chat_session_id: uuid.UUID | None = None
-    message: str
+    # Bound user-controlled prompt size before it is stored and replayed into
+    # later model turns. This is a cost/quota guardrail as well as input hygiene.
+    message: str = Field(min_length=1, max_length=2_000)
     location: Location | None = None
 
 
