@@ -15,6 +15,8 @@ async def create_llm_stream(
     settings: LLMSettings,
     messages: list[dict[str, Any]],
     tool_schemas: list[dict[str, Any]],
+    *,
+    observability_metadata: dict[str, Any] | None = None,
 ) -> Any:
     """Create one bounded, no-retry stream for the selected provider."""
     if not settings.enabled:
@@ -35,6 +37,8 @@ async def create_llm_stream(
         # quota consumption less predictable.
         "num_retries": 0,
     }
+    if observability_metadata:
+        request["metadata"] = observability_metadata
     if settings.api_key is not None:
         request["api_key"] = settings.api_key
     if settings.api_base is not None:

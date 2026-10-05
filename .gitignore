@@ -84,6 +84,7 @@ Thumbs.db
 .kiro/
 
 # ======================
-# Docs (commit when ready)
+# Docs (commit individual guides when ready)
 # ======================
-docs/
+docs/*
+!docs/langfuse-observability.md

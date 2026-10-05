@@ -34,6 +34,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from langfuse import get_client, propagate_attributes
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.llm_config import (
@@ -197,6 +198,52 @@ def _extract_state_ids(
         str(quote_session_id) if quote_session_id else None,
         str(booking_id) if booking_id else None,
     )
+
+
+async def _dispatch_observed_tool(
+    name: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Execute one resolved backend tool inside a typed Langfuse observation.
+
+    The preceding LiteLLM generation records the tool request made by the model;
+    this observation records the trusted arguments RidePilot actually executes
+    and the exact result envelope supplied to the next model round.
+    """
+    func = tools.TOOL_DISPATCH.get(name)
+    observation_name = name.replace("_", "-") if func else "reject-unknown-tool"
+    langfuse = get_client()
+
+    with langfuse.start_as_current_observation(
+        as_type="tool",
+        name=observation_name,
+        input=arguments,
+        metadata={"tool_name": name},
+    ) as tool_observation:
+        if func is None:
+            result = {
+                "success": False,
+                "tool": name,
+                "error": f"unknown tool '{name}'",
+            }
+        else:
+            try:
+                result = await func(**arguments)
+            except TypeError as exc:
+                result = {
+                    "success": False,
+                    "tool": name,
+                    "error": f"invalid arguments for tool '{name}': {exc}",
+                }
+
+        if result.get("success"):
+            tool_observation.update(output=result)
+        else:
+            tool_observation.update(
+                output=result,
+                level="ERROR",
+                status_message=str(result.get("error") or "Tool call failed"),
+            )
+        return result
 
 
 class LLMService:
@@ -371,17 +418,8 @@ class LLMService:
         error envelopes rather than exceptions so the loop can hand them back to
         the model.
         """
-        func = tools.TOOL_DISPATCH.get(name)
-        if func is None:
-            return {"success": False, "tool": name, "error": f"unknown tool '{name}'"}
-        try:
-            return await func(**self._invocation_kwargs(name, arguments, ctx))
-        except TypeError as exc:
-            return {
-                "success": False,
-                "tool": name,
-                "error": f"invalid arguments for tool '{name}': {exc}",
-            }
+        resolved_arguments = self._invocation_kwargs(name, arguments, ctx)
+        return await _dispatch_observed_tool(name, resolved_arguments)
 
     async def _persist_state_link(
         self,
@@ -426,6 +464,73 @@ class LLMService:
     ) -> AsyncIterator[str]:
         """Stream the live LLM reply for one turn, executing tool calls as needed.
 
+        A context manager lives inside this async generator (rather than an
+        ``@observe`` decorator) so its lifetime follows actual stream consumption.
+        Automatic LiteLLM generations and observed tool executions inherit this
+        active agent observation.
+
+        Yields:
+            Successive token chunks of the assistant's reply, in order.
+        """
+        settings: LLMSettings = load_llm_settings()
+        if not settings.enabled:
+            # Defensive fallback: ChatResponder normally selects the stub before
+            # entering this method, but never attempt a live call without a key.
+            yield "⚠️ The AI model is not configured. Please try again later."
+            return
+
+        langfuse = get_client()
+        emitted_parts: list[str] = []
+        round_count = 0
+        with langfuse.start_as_current_observation(
+            as_type="agent",
+            name="ridepilot.ai-turn",
+            input=user_message,
+            metadata={
+                "provider": settings.provider,
+                "model": settings.model,
+                "chat_history_messages": len(context.messages),
+            },
+        ) as agent_observation:
+            with propagate_attributes(
+                user_id=tool_context.user_id,
+                session_id=str(tool_context.chat_session_id),
+                trace_name="ridepilot.ai-turn",
+                tags=["ridepilot", "tool-calling", settings.provider],
+            ):
+                try:
+                    async for chunk, current_round in self._stream_live_reply(
+                        context,
+                        user_message,
+                        tool_context=tool_context,
+                        db=db,
+                        settings=settings,
+                    ):
+                        round_count = max(round_count, current_round)
+                        emitted_parts.append(chunk)
+                        yield chunk
+                finally:
+                    agent_observation.update(
+                        output="".join(emitted_parts),
+                        metadata={
+                            "provider": settings.provider,
+                            "model": settings.model,
+                            "chat_history_messages": len(context.messages),
+                            "rounds": round_count,
+                        },
+                    )
+
+    async def _stream_live_reply(
+        self,
+        context: ConversationContext,
+        user_message: str,
+        *,
+        tool_context: ToolContext,
+        db: AsyncSession | None,
+        settings: LLMSettings,
+    ) -> AsyncIterator[tuple[str, int]]:
+        """Run the existing live loop and pair each emitted chunk with its round.
+
         Runs the streaming tool-calling loop: each round streams the model's text
         deltas as token strings while accumulating any tool calls; when a round
         ends with tool calls, each is executed through the backend tool registry
@@ -438,14 +543,8 @@ class LLMService:
         them even when a smaller model forgets to thread the id through.
 
         Yields:
-            Successive token chunks of the assistant's reply, in order.
+            ``(text chunk, current round)`` pairs in display order.
         """
-        settings: LLMSettings = load_llm_settings()
-        if not settings.enabled:
-            # Defensive fallback: ChatResponder normally selects the stub before
-            # entering this method, but never attempt a live call without a key.
-            yield "⚠️ The AI model is not configured. Please try again later."
-            return
         model = settings.model
         ride_state_block = await self._build_ride_state_block(tool_context)
         messages = _build_messages(context, user_message, ride_state_block)
@@ -472,7 +571,16 @@ class LLMService:
             tool_calls: dict[int, dict[str, Any]] = {}
 
             try:
-                stream = await create_llm_stream(settings, messages, tools.TOOL_SCHEMAS)
+                stream = await create_llm_stream(
+                    settings,
+                    messages,
+                    tools.TOOL_SCHEMAS,
+                    observability_metadata={
+                        "generation_name": "generate-response",
+                        "round": round_num,
+                        "tags": ["ridepilot", "tool-calling"],
+                    },
+                )
                 async for chunk in stream:
                     if not chunk.choices:
                         continue
@@ -482,7 +590,7 @@ class LLMService:
                     if getattr(delta, "content", None):
                         text_parts.append(delta.content)
                         logger.debug("  token: %s", repr(delta.content))
-                        yield delta.content
+                        yield delta.content, round_num
 
                     # Accumulate tool-call fragments across deltas.
                     for tc in getattr(delta, "tool_calls", None) or []:
@@ -502,12 +610,14 @@ class LLMService:
                 if "Connection" in error_name or "Timeout" in error_name:
                     yield (
                         "⚠️ Sorry — I couldn't reach the AI model service. Please "
-                        "make sure it's running and try again."
+                        "make sure it's running and try again.",
+                        round_num,
                     )
                 else:
                     yield (
                         "⚠️ Sorry — an error occurred while generating a response. "
-                        "Please try again in a moment."
+                        "Please try again in a moment.",
+                        round_num,
                     )
                 return
 
@@ -645,4 +755,8 @@ class LLMService:
             # Loop back: re-invoke the model with the tool results in context.
 
         # Reached the round cap without a final text answer — close out politely.
-        yield "I've gathered what I can for now. Could you let me know how you'd like to proceed?"
+        yield (
+            "I've gathered what I can for now. Could you let me know how you'd like "
+            "to proceed?",
+            round_num,
+        )

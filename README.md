@@ -194,10 +194,24 @@ All configuration is via `.env` (see `.env.example` for the full annotated list)
 | `TEST_PICKUP_/DROPOFF_LAT/LNG` | Stand-in coordinates (no geocoding yet). |
 | `CORS_ALLOW_ORIGINS` | Browser origins allowed to call the AI Service. |
 | `LOG_LEVEL` | AI Service log verbosity. |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Enables structured Langfuse tracing when both are set. |
+| `LANGFUSE_BASE_URL` / `LANGFUSE_OTEL_HOST` | Self-hosted Langfuse origin used by the SDK and LiteLLM OTEL exporter. |
+| `LANGFUSE_TRACING_ENVIRONMENT` | Environment label attached to Langfuse observations. |
+| `OTEL_ENVIRONMENT_NAME` | Matching environment label for LiteLLM OpenTelemetry generations. |
+| `USE_OTEL_LITELLM_REQUEST_SPAN` | Gives each streamed LLM call its own generation span. |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | Controls LiteLLM's secondary raw-content span; RidePilot disables it to avoid an incomplete duplicate for streaming calls. |
 
 ## Observability
 
-The AI Service logs each turn — the model input, every tool/API call and its result, and the final reply. Set `TRACE_TO_FILE=true` to also tee those logs to a rotating file (default `services/ai-service/logs/ai-service.log`, bind-mounted to the host in dev) for a persistent, greppable trace. The trace contains full prompts and conversation history, so treat it as a debug artifact.
+The AI Service logs each turn — the model input, every tool/API call and its result, and the final reply. Set `TRACE_TO_FILE=true` to also tee those logs to a rotating file (default `services/ai-service/logs/ai-service.log`, bind-mounted to the host in dev) for a persistent, greppable trace.
+
+When `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are configured, each live AI turn also produces a structured `ridepilot.ai-turn` trace in Langfuse. It contains one generation for every LiteLLM round and one tool observation for every executed backend tool, including the exact input and output passed through the agent loop. The self-hosted Langfuse URL must be reachable from the `ai-service` container; for an instance published on the host at port 3001, use `http://host.docker.internal:3001` for both `LANGFUSE_BASE_URL` and `LANGFUSE_OTEL_HOST`. Do not append `/api/public/otel` to `LANGFUSE_OTEL_HOST`.
+
+Langfuse is optional: missing credentials disable remote tracing without affecting chat. Both local and Langfuse traces contain full prompts, conversation history, locations, and ride/booking data, so treat them as sensitive debug artifacts.
+
+See [Langfuse observability](docs/langfuse-observability.md) for the complete
+trace model, configuration, streaming behavior, shutdown flushing, privacy
+considerations, verification checklist, and troubleshooting guide.
 
 ```zsh
 tail -f services/ai-service/logs/ai-service.log
@@ -205,4 +219,5 @@ tail -f services/ai-service/logs/ai-service.log
 
 ## Documentation
 
-See `docs/` for the architecture and design notes.
+- [Langfuse observability](docs/langfuse-observability.md) — AI turn, LLM
+  generation, and tool-call tracing architecture and operations.

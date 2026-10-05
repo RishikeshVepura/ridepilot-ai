@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.chat_routes import router as chat_router
 from api.event_routes import router as internal_events_router
+from core.obs import configure_langfuse, shutdown_langfuse
 from db.database import database
 from services.llm_service import llm_status
 
@@ -108,9 +109,13 @@ CORS_ALLOW_ORIGINS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create chat_sessions and chat_messages tables if they don't exist.
-    await database.init_db()
-    yield
+    configure_langfuse()
+    try:
+        # Create chat_sessions and chat_messages tables if they don't exist.
+        await database.init_db()
+        yield
+    finally:
+        shutdown_langfuse()
 
 
 app = FastAPI(title="AI Service", lifespan=lifespan)
